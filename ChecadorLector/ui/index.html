@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Checador</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --fondo: #F4F6F8; --tinta: #1B2733; --azul: #1F4E78;
+    --ok: #2E7D32; --error: #C62828; --aviso: #EF6C00;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body { background: var(--fondo); color: var(--tinta); font-family: 'Segoe UI', system-ui, sans-serif; user-select: none; cursor: default; }
+
+  /* Todo se mide en cqw (1% del ancho de la pantalla), así se ve igual en cualquier resolución 16:9 o 16:10 */
+  .pantalla { container-type: inline-size; width: 100vw; height: 100vh; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; }
+  .top { background: var(--azul); color: #fff; display: flex; justify-content: space-between; align-items: center; gap: 2cqw; padding: 1.3cqw 2.4cqw; font-size: 2cqw; }
+  .pill { font-size: max(10px, 1.6cqw); padding: .4cqw 1.4cqw; border-radius: 99px; background: rgba(255, 255, 255, .2); white-space: nowrap; }
+  .reloj { text-align: center; padding-top: 1.2cqw; }
+  .fecha { font-size: 1.9cqw; color: #4A5B6C; }
+  .hora { font-size: 8.4cqw; font-weight: 300; line-height: 1.05; font-variant-numeric: tabular-nums; color: var(--azul); }
+  .estado { padding: 1.2cqw 4cqw 1.4cqw; display: grid; min-height: 0; }
+  .tarjeta { border-radius: 1cqw; display: grid; align-content: center; justify-items: center; text-align: center; gap: .4cqw; padding: .8cqw 3cqw; background: #fff; border: .2cqw solid #D8DFE7; color: var(--azul); }
+  .t { font-size: 3.2cqw; font-weight: 600; margin: 0; line-height: 1.15; }
+  .s { font-size: 2cqw; margin: 0; line-height: 1.25; color: #4A5B6C; }
+  .huella { width: 6.4cqw; height: 6.4cqw; animation: latido 2.2s ease-in-out infinite; }
+  @keyframes latido { 0%, 100% { opacity: .55; transform: scale(.96); } 50% { opacity: 1; transform: scale(1.04); } }
+  @media (prefers-reduced-motion: reduce) { .huella { animation: none; } }
+  .pie { font-size: max(10px, 1.5cqw); color: #566678; padding: .9cqw 2.4cqw; display: flex; justify-content: space-between; gap: 2cqw; border-top: 1px solid #DDE3EA; }
+</style>
+</head>
+<body>
+  <div class="pantalla">
+    <div class="top"><span>Checador · <b id="sucursal">Sin configurar</b></span><span class="pill" id="red">Conectando…</span></div>
+    <div class="reloj"><div class="fecha" id="fecha"></div><div class="hora" id="hora"></div></div>
+    <div class="estado">
+      <div class="tarjeta">
+        <svg class="huella" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M8 20a16 16 0 0 1 32 0"/><path d="M13 36c-1-4-1-8 0-12a11 11 0 0 1 22 0c0 5 .5 9 2 13"/><path d="M19 40c-1-5-1-10 0-15a5 5 0 0 1 10 0c0 6 1 10 2.5 14"/><path d="M24 42c-1-6-1-12 0-17"/></svg>
+        <p class="t">Coloca tu dedo en el lector</p>
+        <p class="s">Mantén el dedo puesto hasta que el lector parpadee</p>
+      </div>
+    </div>
+    <div class="pie"><span id="info">Lector sin conexión con la API</span><span id="aviso"></span></div>
+  </div>
+
+<script>
+  const pad = (n) => String(n).padStart(2, '0');
+  function tick() {
+    const d = new Date();
+    document.getElementById('hora').textContent = pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+    const f = d.toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' });
+    document.getElementById('fecha').textContent = f.charAt(0).toUpperCase() + f.slice(1);
+  }
+  tick();
+  setInterval(tick, 250);
+</script>
+</body>
+</html>
