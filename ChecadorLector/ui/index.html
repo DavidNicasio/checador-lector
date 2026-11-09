@@ -22,15 +22,30 @@
   .fecha { font-size: 1.9cqw; color: #4A5B6C; }
   .hora { font-size: 8.4cqw; font-weight: 300; line-height: 1.05; font-variant-numeric: tabular-nums; color: var(--azul); }
   .estado { padding: 1.2cqw 4cqw 1.4cqw; display: grid; min-height: 0; }
-  .tarjeta { border-radius: 1cqw; display: grid; align-content: center; justify-items: center; text-align: center; gap: .4cqw; padding: .8cqw 3cqw; background: #fff; border: .2cqw solid #D8DFE7; color: var(--azul); }
+
+  .tarjeta { border-radius: 1cqw; display: grid; align-content: center; justify-items: center; text-align: center; padding: .8cqw 3cqw; background: #fff; border: .2cqw solid #D8DFE7; color: var(--azul); }
+  .tarjeta.ok { border-color: var(--ok); background: #F1F8F2; }
+  .tarjeta.aviso { border-color: var(--aviso); background: #FFF6EC; }
+  .tarjeta.error { border-color: var(--error); background: #FDF1F1; }
+  .reposo, .resultado { display: grid; justify-items: center; gap: .4cqw; }
   .t { font-size: 3.2cqw; font-weight: 600; margin: 0; line-height: 1.15; }
   .s { font-size: 2cqw; margin: 0; line-height: 1.25; color: #4A5B6C; }
-  .s.ok { color: var(--ok); font-weight: 600; }
-  .s.err { color: var(--error); font-weight: 600; }
-  #lectura { min-height: 2.6cqw; }
   .huella { width: 6.4cqw; height: 6.4cqw; animation: latido 2.2s ease-in-out infinite; }
   @keyframes latido { 0%, 100% { opacity: .55; transform: scale(.96); } 50% { opacity: 1; transform: scale(1.04); } }
   @media (prefers-reduced-motion: reduce) { .huella { animation: none; } }
+
+  /* Resultado de una checada */
+  .r-icono { margin: 0; width: 6.4cqw; height: 6.4cqw; border-radius: 50%; display: grid; place-items: center; font-size: 4.2cqw; font-weight: 700; color: #fff; }
+  .ok .r-icono { background: var(--ok); }
+  .aviso .r-icono { background: var(--aviso); }
+  .error .r-icono { background: var(--error); }
+  .r-titulo { margin: 0; font-size: 3.6cqw; font-weight: 600; line-height: 1.15; }
+  .ok .r-titulo { color: var(--ok); }
+  .aviso .r-titulo { color: #B85400; }
+  .error .r-titulo { color: var(--error); }
+  .r-sub { margin: 0; font-size: 2.2cqw; color: var(--tinta); line-height: 1.25; }
+  .r-detalle { margin: 0; font-size: 1.9cqw; color: #4A5B6C; min-height: 1.4em; }
+
   .pie { font-size: max(10px, 1.5cqw); color: #566678; padding: .9cqw 2.4cqw; display: flex; justify-content: space-between; gap: 2cqw; border-top: 1px solid #DDE3EA; }
   #lector.mal { color: #B85400; font-weight: 600; }
   #aviso { color: #B85400; font-weight: 600; text-align: right; }
@@ -68,6 +83,8 @@
   .reg-titulo.err { color: var(--error); }
   .reg-titulo.ok { color: var(--ok); }
   .reg-ayuda { color: #4A5B6C; max-width: 60cqw; }
+  .reg-caja .s.ok { color: var(--ok); font-weight: 600; }
+  .reg-caja .s.err { color: var(--error); font-weight: 600; }
   .pasos { display: flex; gap: 1.2cqw; }
   .paso { width: 3cqw; height: 3cqw; border-radius: 50%; border: .3cqw solid #B8C4D0; }
   .paso.hecho { background: var(--ok); border-color: var(--ok); }
@@ -80,11 +97,18 @@
     <div class="top"><span>Checador · <b id="sucursal">Sin configurar</b></span><span class="pill" id="red">Conectando…</span></div>
     <div class="reloj"><div class="fecha" id="fecha"></div><div class="hora" id="hora"></div></div>
     <div class="estado">
-      <div class="tarjeta">
-        <svg class="huella" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M8 20a16 16 0 0 1 32 0"/><path d="M13 36c-1-4-1-8 0-12a11 11 0 0 1 22 0c0 5 .5 9 2 13"/><path d="M19 40c-1-5-1-10 0-15a5 5 0 0 1 10 0c0 6 1 10 2.5 14"/><path d="M24 42c-1-6-1-12 0-17"/></svg>
-        <p class="t" id="titulo">Coloca tu dedo en el lector</p>
-        <p class="s">Mantén el dedo puesto hasta que el lector parpadee</p>
-        <p class="s" id="lectura"></p>
+      <div class="tarjeta" id="tarjeta">
+        <div class="reposo" id="reposo">
+          <svg class="huella" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M8 20a16 16 0 0 1 32 0"/><path d="M13 36c-1-4-1-8 0-12a11 11 0 0 1 22 0c0 5 .5 9 2 13"/><path d="M19 40c-1-5-1-10 0-15a5 5 0 0 1 10 0c0 6 1 10 2.5 14"/><path d="M24 42c-1-6-1-12 0-17"/></svg>
+          <p class="t" id="titulo">Coloca tu dedo en el lector</p>
+          <p class="s">Mantén el dedo puesto hasta que el lector parpadee</p>
+        </div>
+        <div class="resultado oculto" id="resultado">
+          <p class="r-icono" id="rIcono"></p>
+          <p class="r-titulo" id="rTitulo"></p>
+          <p class="r-sub" id="rSub"></p>
+          <p class="r-detalle" id="rDetalle"></p>
+        </div>
       </div>
     </div>
     <div class="pie"><span id="info">Lector sin conexión con la API</span><span id="lector">Lector de huellas: iniciando…</span><span id="aviso"></span></div>
@@ -153,6 +177,29 @@
   tick();
   setInterval(tick, 250);
 
+  // ---------- Resultado de una checada ----------
+  let temporizadorResultado;
+  const ICONOS = { ok: '✓', aviso: '!', error: '✕' };
+
+  function quitarResultado() {
+    clearTimeout(temporizadorResultado);
+    $('resultado').classList.add('oculto');
+    $('reposo').classList.remove('oculto');
+    $('tarjeta').className = 'tarjeta';
+  }
+
+  function mostrarResultado(m) {
+    clearTimeout(temporizadorResultado);
+    $('tarjeta').className = 'tarjeta ' + m.clase;
+    $('rIcono').textContent = ICONOS[m.clase] || '';
+    $('rTitulo').textContent = m.titulo || '';
+    $('rSub').textContent = m.subtitulo || '';
+    $('rDetalle').textContent = m.detalle || '';
+    $('reposo').classList.add('oculto');
+    $('resultado').classList.remove('oculto');
+    temporizadorResultado = setTimeout(quitarResultado, 3000);
+  }
+
   // ---------- Modo administrador ----------
   const NOMBRES_DEDO = ['Pulgar der.', 'Índice der.', 'Medio der.', 'Anular der.', 'Meñique der.',
                         'Pulgar izq.', 'Índice izq.', 'Medio izq.', 'Anular izq.', 'Meñique izq.'];
@@ -187,6 +234,8 @@
     mostrarVista('admLogin');
     $('admEntrar').disabled = false;
     $('admin').classList.add('abierto');
+    quitarResultado();
+    enviar({ accion: 'abrirAdmin' });   // mientras esta pantalla esté abierta, las capturas no checan
     $('admLlave').focus();
   }
 
@@ -337,8 +386,6 @@
   });
 
   // ---------- Mensajes que manda el programa (C#) ----------
-  let temporizadorLectura;
-
   function mensajeDeAdmin(m) {
     if (!adminAbierto()) return;
 
@@ -397,16 +444,14 @@
         $('lector').textContent = m.texto;
         $('lector').classList.toggle('mal', !m.listo);
       } else if (m.tipo === 'dedo') {
+        // Un dedo nuevo borra el resultado anterior para que se vea "Leyendo…"
+        if (m.puesto && !adminAbierto()) quitarResultado();
         $('titulo').textContent = m.puesto ? 'Leyendo tu huella…' : 'Coloca tu dedo en el lector';
         if (regFase === 'captura') {
           $('regTitulo').textContent = m.puesto ? 'Leyendo…' : 'Pon el dedo en el lector';
         }
-      } else if (m.tipo === 'lectura') {
-        const l = $('lectura');
-        l.textContent = m.texto;
-        l.className = 's ' + (m.buena ? 'ok' : 'err');
-        clearTimeout(temporizadorLectura);
-        temporizadorLectura = setTimeout(() => { l.textContent = ''; l.className = 's'; }, 3000);
+      } else if (m.tipo === 'checada') {
+        if (!adminAbierto()) mostrarResultado(m);
       } else if (m.tipo === 'admin') {
         mensajeDeAdmin(m);
       }

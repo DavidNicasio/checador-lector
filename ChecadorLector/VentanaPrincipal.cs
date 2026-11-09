@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Media;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using Microsoft.Web.WebView2.Core;
@@ -20,8 +22,9 @@ namespace ChecadorLector
         private readonly System.Windows.Forms.Timer _timerEstado = new System.Windows.Forms.Timer { Interval = 30000 };
         private readonly System.Windows.Forms.Timer _timerLector = new System.Windows.Forms.Timer { Interval = 5000 };
 
-        // Se crea con la ventana, ANTES de abrir el lector (los objetos del SDK se crean una sola vez)
+        // Se crean con la ventana, ANTES de abrir el lector (los objetos del SDK se crean una sola vez)
         private readonly RegistroHuella _registro = new RegistroHuella();
+        private readonly Identificador _identificador = new Identificador();
 
         private ApiCliente _api;
         private ApiAdmin _admin;
@@ -30,9 +33,11 @@ namespace ChecadorLector
         private bool _actualizando;
         private int _tokenRegistro;                // para ignorar un registro que se canceló mientras se preparaba
         private volatile bool _guardando;          // subiendo una huella: se ignoran capturas nuevas
+        private volatile bool _checando;           // mandando una checada: se ignoran capturas nuevas
+        private volatile bool _modoAdmin;          // pantalla de administrador abierta: las capturas no checan
         private string _ultimaSucursal = "Sin conectar";
 
-        // Diferencia entre el reloj del servidor y el de esta PC (se usará para sellar las checadas)
+        // Diferencia entre el reloj del servidor y el de esta PC (sirve para sellar las checadas)
         public TimeSpan DesfaseReloj { get; private set; }
 
         public VentanaPrincipal(bool kiosco)
@@ -135,6 +140,9 @@ namespace ChecadorLector
 
                 switch (m.Accion)
                 {
+                    case "abrirAdmin":
+                        _modoAdmin = true;
+                        break;
                     case "entrarAdmin":
                         await EntrarAdminAsync(m.Llave);
                         break;
@@ -159,7 +167,7 @@ namespace ChecadorLector
 
         private async Task EntrarAdminAsync(string llave)
         {
-            SalirAdmin(); // limpia cualquier sesión anterior
+            CerrarSesionAdmin(); // limpia cualquier sesión anterior (la pantalla de administrador sigue abierta)
 
             if (string.IsNullOrWhiteSpace(llave))
             {
@@ -206,8 +214,14 @@ namespace ChecadorLector
             }
         }
 
-        // Olvida la llave de administración (y cancela cualquier registro en curso)
+        // Cierra el modo administrador: olvida la llave y cancela cualquier registro
         private void SalirAdmin()
+        {
+            _modoAdmin = false;
+            CerrarSesionAdmin();
+        }
+
+        private void CerrarSesionAdmin()
         {
             CancelarRegistro();
             if (_admin == null) return;
@@ -357,6 +371,9 @@ namespace ChecadorLector
                     dedo = dedo,
                     empleados = ProyectarLista(lista)
                 });
+
+                // La huella nueva ya debe poder reconocerse al checar
+                await ActualizarPlantillasAsync();
             }
             catch (ErrorApi ex)
             {
@@ -405,15 +422,195 @@ namespace ChecadorLector
                 return;
             }
 
-            string problema = _lector.Evaluar(muestra);
-            bool buena = problema == null;
-            string texto = buena ? "Huella leída correctamente" : problema;
-            EnInterfaz(() => Enviar(new { tipo = "lectura", buena = buena, texto = texto }));
+            // Con la pantalla de administrador abierta, las capturas no cuentan como checadas
+            if (_modoAdmin) return;
+
+            // Todavía se está mandando la checada anterior
+            if (_checando) return;
+
+            ProcesarChecada(muestra);
         }
 
         private void MostrarLector(bool listo, string texto)
         {
             Enviar(new { tipo = "lector", listo = listo, texto = texto });
+        }
+
+        // ---------------------------------------------------------------- Checar
+
+        // Hora actual corregida con la del servidor (para no depender de que el reloj de la PC esté bien)
+        private DateTimeOffset Ahora()
+        {
+            return (DateTimeOffset.UtcNow + DesfaseReloj).ToLocalTime();
+        }
+
+        // Corre en el hilo del SDK
+        private void ProcesarChecada(DPFP.Sample muestra)
+        {
+            Identificacion quien;
+            try
+            {
+                quien = _identificador.Identificar(_lector, muestra);
+            }
+            catch (Exception)
+            {
+                EnInterfaz(() => MostrarChecada("error", "Error del lector", "Vuelve a poner el dedo", ""));
+                return;
+            }
+
+            switch (quien.Estado)
+            {
+                case EstadoIdentificacion.SinPlantillas:
+                    EnInterfaz(() => MostrarChecada("error", "Sin huellas cargadas",
+                        "Revisa la conexión con la API o avisa a sistemas", ""));
+                    break;
+
+                case EstadoIdentificacion.MalaLectura:
+                    EnInterfaz(() => MostrarChecada("aviso", "Lectura no válida", quien.Mensaje, ""));
+                    break;
+
+                case EstadoIdentificacion.NoReconocida:
+                    EnInterfaz(() => MostrarChecada("aviso", "No te reconocí",
+                        "Limpia y seca el dedo y vuelve a intentarlo", ""));
+                    break;
+
+                case EstadoIdentificacion.Multiple:
+                    EnInterfaz(() => MostrarChecada("error", "Huella no válida para checar",
+                        "Avisa a sistemas", ""));
+                    break;
+
+                case EstadoIdentificacion.Reconocida:
+                    _checando = true;
+                    DateTimeOffset cuando = Ahora();   // la hora en que se capturó
+                    Guid idLocal = Guid.NewGuid();     // un reintento de ESTA checada mandaría el mismo
+                    EnInterfaz(() =>
+                    {
+                        Task tarea = RegistrarChecadaAsync(quien, cuando, idLocal);
+                    });
+                    break;
+            }
+        }
+
+        // Hilo de la interfaz: manda la checada y muestra lo que contestó la API
+        private async Task RegistrarChecadaAsync(Identificacion quien, DateTimeOffset cuando, Guid idLocal)
+        {
+            try
+            {
+                if (_api == null)
+                {
+                    MostrarChecada("error", "Sin conexión", "La checada NO se guardó. Avisa a tu supervisor.", "");
+                    return;
+                }
+
+                // relojLector va con la hora ya corregida: el desfase de la PC se avisa en pantalla (arriba)
+                // y la API queda como red de seguridad por si esa corrección estuviera vieja.
+                ResultadoChecada r = await _api.EnviarChecadaAsync(idLocal, quien.EmpleadoId, cuando, Ahora());
+                MostrarResultadoChecada(quien, cuando, r);
+            }
+            catch (ErrorApi ex)
+            {
+                MostrarChecada("error", "No se pudo checar", ex.Message + " La checada NO se guardó.", "");
+            }
+            catch (Exception)
+            {
+                MostrarChecada("error", "Sin conexión",
+                    "La checada NO se guardó. Avisa a tu supervisor.", "");
+            }
+            finally
+            {
+                _checando = false;
+            }
+        }
+
+        private void MostrarResultadoChecada(Identificacion quien, DateTimeOffset cuando, ResultadoChecada r)
+        {
+            string hora = cuando.ToString("HH:mm", CultureInfo.InvariantCulture);
+
+            switch (r.Estado)
+            {
+                case "REGISTRADA":
+                case "DUPLICADA":
+                    string detalle = "";
+                    if (r.Estado == "REGISTRADA" && r.NumeroDelDia.HasValue)
+                    {
+                        detalle = r.EsperadasDelDia.HasValue && r.EsperadasDelDia.Value > 0
+                            ? r.NumeroDelDia.Value + " de " + r.EsperadasDelDia.Value + " hoy"
+                            : "Checada " + r.NumeroDelDia.Value + " de hoy";
+                    }
+                    MostrarChecada("ok", quien.Nombre, "Checada registrada · " + hora, detalle);
+                    break;
+
+                case "REBOTE":
+                    string previa = "";
+                    DateTimeOffset anterior;
+                    if (r.Checada != null && DateTimeOffset.TryParse(
+                            r.Checada.FechaHoraUtc, CultureInfo.InvariantCulture, DateTimeStyles.None, out anterior))
+                    {
+                        previa = "Tu checada de las "
+                                 + anterior.ToLocalTime().ToString("HH:mm", CultureInfo.InvariantCulture)
+                                 + " ya está registrada";
+                    }
+                    MostrarChecada("aviso", quien.Nombre, "Ya checaste hace un momento", previa);
+                    break;
+
+                default: // RECHAZADA
+                    MostrarRechazo(quien, r.Motivo);
+                    break;
+            }
+        }
+
+        private void MostrarRechazo(Identificacion quien, string motivo)
+        {
+            switch (motivo)
+            {
+                case "RELOJ_DESFASADO":
+                    MostrarChecada("error", "Reloj del equipo desfasado",
+                        "La checada NO se guardó. Avisa a sistemas.", "");
+                    break;
+                case "SUCURSAL_INACTIVA":
+                    MostrarChecada("error", "Sucursal inactiva",
+                        "La checada NO se guardó. Avisa a sistemas.", "");
+                    break;
+                case "EMPLEADO_BAJA":
+                case "EMPLEADO_NO_EXISTE":
+                    MostrarChecada("error", quien.Nombre, "No puedes checar. Habla con recursos humanos.", "");
+                    break;
+                case "ANTES_DE_INGRESO":
+                    MostrarChecada("error", quien.Nombre,
+                        "Tu fecha de ingreso es posterior a hoy. Habla con recursos humanos.", "");
+                    break;
+                default: // fechas inválidas, antigua o futura
+                    MostrarChecada("error", "Fecha del equipo incorrecta",
+                        "La checada NO se guardó. Avisa a sistemas.", "");
+                    break;
+            }
+        }
+
+        // clase: "ok", "aviso" o "error". Hilo de la interfaz.
+        private void MostrarChecada(string clase, string titulo, string subtitulo, string detalle)
+        {
+            if (clase == "ok") SystemSounds.Asterisk.Play();
+            else if (clase == "aviso") SystemSounds.Exclamation.Play();
+            else SystemSounds.Hand.Play();
+
+            Enviar(new { tipo = "checada", clase = clase, titulo = titulo, subtitulo = subtitulo, detalle = detalle });
+        }
+
+        // ---------------------------------------------------------------- Huellas cargadas
+
+        // Baja las plantillas solo si cambiaron. Si falla se conserva lo que ya había.
+        private async Task ActualizarPlantillasAsync()
+        {
+            if (_api == null) return;
+            try
+            {
+                RespuestaPlantillas r = await _api.PlantillasAsync(_identificador.Version);
+                if (!r.SinCambios) _identificador.Cargar(r.Plantillas, r.Version);
+            }
+            catch (Exception)
+            {
+                // Se reintenta en el siguiente ciclo
+            }
         }
 
         // ---------------------------------------------------------------- Estado de la API
@@ -463,6 +660,8 @@ namespace ChecadorLector
                 DesfaseReloj = r.Desfase;
                 _ultimaSucursal = r.Estado.Sucursal.Nombre;
 
+                await ActualizarPlantillasAsync();
+
                 TimeSpan tolerancia = TimeSpan.FromMinutes(r.Estado.Configuracion.ToleranciaRelojMin);
                 string aviso = "";
                 if (r.Desfase.Duration() > tolerancia)
@@ -474,8 +673,10 @@ namespace ChecadorLector
                     aviso = "Sucursal inactiva · avisa a sistemas";
                 }
 
+                int huellas = _identificador.Total;
+                string cargadas = huellas == 0 ? "sin huellas cargadas" : huellas + " huellas cargadas";
                 Mostrar(_ultimaSucursal, "En línea", true,
-                    r.Estado.Lector.Nombre + " · API conectada", aviso);
+                    r.Estado.Lector.Nombre + " · API conectada · " + cargadas, aviso);
             }
             catch (ErrorApi ex)
             {

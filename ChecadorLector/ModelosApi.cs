@@ -66,6 +66,35 @@ namespace ChecadorLector
         public List<PlantillaRemota> Plantillas { get; set; } = new List<PlantillaRemota>();
     }
 
+    // ---- Respuesta de POST /lector/checadas ----
+
+    public class DatosChecada
+    {
+        public int Id { get; set; }
+        public string FechaHoraUtc { get; set; }
+        public string FechaHoraLocal { get; set; }
+    }
+
+    public class DatosEmpleado
+    {
+        public int Id { get; set; }
+        public string NumeroEmpleado { get; set; }
+        public string Nombre { get; set; }
+    }
+
+    // Estado: REGISTRADA, DUPLICADA, REBOTE o RECHAZADA (con Motivo y Reintentable)
+    public class ResultadoChecada
+    {
+        public string IdLocal { get; set; }
+        public string Estado { get; set; }
+        public string Motivo { get; set; }
+        public bool? Reintentable { get; set; }
+        public DatosChecada Checada { get; set; }
+        public DatosEmpleado Empleado { get; set; }
+        public int? NumeroDelDia { get; set; }
+        public int? EsperadasDelDia { get; set; }
+    }
+
     // Mensaje que manda la pantalla (HTML) al programa
     public class MensajeUi
     {

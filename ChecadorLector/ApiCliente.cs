@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Net.Http;
+using System.Text;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
 
@@ -19,6 +20,12 @@ namespace ChecadorLector
                 Timeout = TimeSpan.FromSeconds(10)
             };
             _http.DefaultRequestHeaders.Add("x-lector-key", config.LlaveLector);
+        }
+
+        // Fecha ISO 8601 con zona, como la pide la API (por ejemplo 2026-11-09T08:02:00.000-06:00)
+        public static string Iso(DateTimeOffset fecha)
+        {
+            return fecha.ToString("yyyy-MM-dd'T'HH:mm:ss.fffzzz", CultureInfo.InvariantCulture);
         }
 
         public async Task<ResultadoEstado> EstadoAsync()
@@ -53,10 +60,15 @@ namespace ChecadorLector
         }
 
         // Plantillas de los empleados activos, para comparar en local. Quedan solo en memoria.
-        // La API limita esta consulta a 10 por minuto y cada descarga queda en su bitácora.
-        public async Task<List<PlantillaRemota>> PlantillasAsync()
+        // Si se manda la versión que ya se tiene y no cambió, la API responde SinCambios sin plantillas.
+        // La API limita esta consulta a 10 por minuto y cada descarga real queda en su bitácora.
+        public async Task<RespuestaPlantillas> PlantillasAsync(string version)
         {
-            using (HttpResponseMessage respuesta = await _http.GetAsync("lector/plantillas"))
+            string ruta = string.IsNullOrEmpty(version)
+                ? "lector/plantillas"
+                : "lector/plantillas?version=" + Uri.EscapeDataString(version);
+
+            using (HttpResponseMessage respuesta = await _http.GetAsync(ruta))
             {
                 int codigo = (int)respuesta.StatusCode;
                 if (codigo == 401)
@@ -73,10 +85,55 @@ namespace ChecadorLector
                 }
 
                 string cuerpo = await respuesta.Content.ReadAsStringAsync();
-                RespuestaPlantillas datos = JsonConvert.DeserializeObject<RespuestaPlantillas>(cuerpo);
-                return datos != null && datos.Plantillas != null
-                    ? datos.Plantillas
-                    : new List<PlantillaRemota>();
+                RespuestaPlantillas datos = JsonConvert.DeserializeObject<RespuestaPlantillas>(cuerpo)
+                                            ?? new RespuestaPlantillas();
+                if (datos.Plantillas == null) datos.Plantillas = new List<PlantillaRemota>();
+                return datos;
+            }
+        }
+
+        // Todas las plantillas, sin comparar versión (para el modo de registro)
+        public async Task<List<PlantillaRemota>> PlantillasAsync()
+        {
+            RespuestaPlantillas datos = await PlantillasAsync(null);
+            return datos.Plantillas;
+        }
+
+        // Manda una checada. fechaHora = cuándo se capturó; relojLector = la hora del reloj al enviar.
+        // Si la API no se alcanza lanza una excepción de red (el llamador decide qué hacer).
+        public async Task<ResultadoChecada> EnviarChecadaAsync(
+            Guid idLocal, int empleadoId, DateTimeOffset fechaHora, DateTimeOffset relojLector)
+        {
+            string json = JsonConvert.SerializeObject(new
+            {
+                idLocal = idLocal.ToString(),
+                empleadoId = empleadoId,
+                fechaHora = Iso(fechaHora),
+                relojLector = Iso(relojLector)
+            });
+
+            using (var contenido = new StringContent(json, Encoding.UTF8, "application/json"))
+            using (HttpResponseMessage respuesta = await _http.PostAsync("lector/checadas", contenido))
+            {
+                int codigo = (int)respuesta.StatusCode;
+                if (codigo == 401)
+                {
+                    throw new ErrorApi("La llave del lector no es válida o está desactivada.", 401);
+                }
+                if (codigo == 429)
+                {
+                    throw new ErrorApi("Demasiadas checadas seguidas. Espera un momento.", 429);
+                }
+                if (!respuesta.IsSuccessStatusCode)
+                {
+                    throw new ErrorApi("La API no aceptó la checada (código " + codigo + ").", codigo);
+                }
+
+                string cuerpo = await respuesta.Content.ReadAsStringAsync();
+                var ajustes = new JsonSerializerSettings { DateParseHandling = DateParseHandling.None };
+                ResultadoChecada resultado = JsonConvert.DeserializeObject<ResultadoChecada>(cuerpo, ajustes);
+                if (resultado == null) throw new ErrorApi("La API contestó algo que no se entiende.", codigo);
+                return resultado;
             }
         }
 
