@@ -37,11 +37,12 @@ namespace ChecadorLector
         private bool _enviandoAvisos;              // mandando avisos del lector: no se empalman dos envíos
         private bool _lectorSeDesconecto;          // para avisar cuando el lector regresa
         private bool _falloInicioReportado;        // el lector no pudo iniciar y ya se avisó
+        private bool _salidaAutorizada;            // en kiosco, la ventana solo cierra si esto es true
         private int _fallosCola;                   // envíos seguidos que la API rechazó (no por falta de red)
         private int _tokenRegistro;                // para ignorar un registro que se canceló mientras se preparaba
         private volatile bool _guardando;          // subiendo una huella: se ignoran capturas nuevas
         private volatile bool _checando;           // mandando una checada: se ignoran capturas nuevas
-        private volatile bool _modoAdmin;          // pantalla de administrador abierta: las capturas no checan
+        private volatile bool _modoAdmin;          // pantalla de administrador o de salida abierta: las capturas no checan
         private string _ultimaSucursal = "Sin conectar";
 
         // Diferencia entre el reloj del servidor y el de esta PC (sirve para sellar las checadas)
@@ -96,6 +97,8 @@ namespace ChecadorLector
                 web.Settings.AreDefaultContextMenusEnabled = false;
                 web.Settings.IsZoomControlEnabled = false;
                 web.Settings.IsStatusBarEnabled = false;
+                // En kiosco se quitan los atajos del navegador (F5, Ctrl+P, Ctrl+F...)
+                web.Settings.AreBrowserAcceleratorKeysEnabled = !_kiosco;
 
                 // Lo que la pantalla le pide al programa (por ejemplo, entrar al modo administrador)
                 web.WebMessageReceived += async (s, ev) => await AlRecibirMensajeAsync(ev.WebMessageAsJson);
@@ -109,8 +112,21 @@ namespace ChecadorLector
                 MessageBox.Show(
                     "No se pudo iniciar la pantalla del checador.\n\n" + ex.Message,
                     "Checador", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                _salidaAutorizada = true; // sin pantalla no hay nada que proteger
                 Close();
             }
+        }
+
+        // En kiosco, Alt+F4 y el cierre normal no cierran el programa: solo la salida con la llave
+        // de administración (o que Windows se apague).
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            if (_kiosco && !_salidaAutorizada && e.CloseReason == CloseReason.UserClosing)
+            {
+                e.Cancel = true;
+                return;
+            }
+            base.OnFormClosing(e);
         }
 
         protected override void OnFormClosed(FormClosedEventArgs e)
@@ -159,7 +175,14 @@ namespace ChecadorLector
                 switch (m.Accion)
                 {
                     case "abrirAdmin":
+                    case "abrirSalida":
                         _modoAdmin = true;
+                        break;
+                    case "cancelarSalida":
+                        _modoAdmin = false;
+                        break;
+                    case "cerrarPrograma":
+                        await CerrarProgramaAsync(m.Llave);
                         break;
                     case "entrarAdmin":
                         await EntrarAdminAsync(m.Llave);
@@ -179,6 +202,54 @@ namespace ChecadorLector
             {
                 // Un mensaje mal formado no debe tirar el programa
             }
+        }
+
+        // ---------------------------------------------------------------- Salir del programa
+
+        // Cierra el programa solo si la llave de administración es válida (la API la comprueba)
+        private async Task CerrarProgramaAsync(string llave)
+        {
+            if (string.IsNullOrWhiteSpace(llave))
+            {
+                ErrorSalida("Escribe la llave de administración.");
+                return;
+            }
+
+            try
+            {
+                Configuracion config = Configuracion.Cargar();
+                string problema;
+                if (!config.EsValida(out problema))
+                {
+                    ErrorSalida(problema);
+                    return;
+                }
+
+                using (var admin = new ApiAdmin(config, llave))
+                {
+                    await admin.ResumenAsync(); // si la llave no sirve, la API contesta 401
+                }
+
+                _salidaAutorizada = true;
+                Close();
+            }
+            catch (ErrorApi ex)
+            {
+                ErrorSalida(ex.Message);
+            }
+            catch (FormatException)
+            {
+                ErrorSalida("La llave tiene caracteres no válidos.");
+            }
+            catch (Exception)
+            {
+                ErrorSalida("Sin conexión con la API: no se puede comprobar la llave.");
+            }
+        }
+
+        private void ErrorSalida(string texto)
+        {
+            Enviar(new { tipo = "salida", texto = texto });
         }
 
         // ---------------------------------------------------------------- Modo administrador
@@ -469,7 +540,7 @@ namespace ChecadorLector
                 return;
             }
 
-            // Con la pantalla de administrador abierta, las capturas no cuentan como checadas
+            // Con la pantalla de administrador (o la de salida) abierta, las capturas no cuentan como checadas
             if (_modoAdmin) return;
 
             // Todavía se está mandando la checada anterior

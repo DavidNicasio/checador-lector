@@ -52,7 +52,7 @@
   #cola.mal { color: var(--error); }
   #aviso { color: #B85400; font-weight: 600; text-align: right; }
 
-  /* ---- Modo administrador (Ctrl+Shift+A) ---- */
+  /* ---- Modo administrador (Ctrl+Shift+A) y salida del programa (Ctrl+Shift+Q) ---- */
   .oculto { display: none !important; }
   .admin { position: fixed; inset: 0; background: var(--fondo); z-index: 10; display: none; grid-template-rows: auto minmax(0, 1fr); user-select: text; }
   .admin.abierto { display: grid; }
@@ -63,8 +63,8 @@
   .btn { font: inherit; padding: .7cqw 1.6cqw; border-radius: .5cqw; border: 1px solid #B8C4D0; background: #fff; color: var(--tinta); cursor: pointer; }
   .btn.primario { background: var(--azul); border-color: var(--azul); color: #fff; }
   .btn:disabled { opacity: .5; cursor: default; }
-  #admMensaje { margin: 0; min-height: 1.6em; color: var(--error); font-weight: 600; }
-  #admMensaje.info { color: #4A5B6C; font-weight: 400; }
+  #admMensaje, #salMensaje { margin: 0; min-height: 1.6em; color: var(--error); font-weight: 600; }
+  #admMensaje.info, #salMensaje.info { color: #4A5B6C; font-weight: 400; }
   .admin-lista { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 1cqw; min-height: 0; }
   .admin-filas { overflow: auto; background: #fff; border: 1px solid #D8DFE7; border-radius: .6cqw; }
   .fila { display: grid; grid-template-columns: 8cqw 1fr auto; gap: 1.2cqw; align-items: center; padding: .8cqw 1.4cqw; border-bottom: 1px solid #EDF1F5; }
@@ -163,6 +163,19 @@
 
       </div>
     </div>
+
+    <!-- Cerrar el programa: se abre con Ctrl+Shift+Q -->
+    <div class="admin" id="salida">
+      <div class="admin-top"><b>Cerrar el checador</b><button class="btn" id="salCancelar" type="button">Cancelar</button></div>
+      <div class="admin-cuerpo">
+        <div class="admin-login">
+          <span>Escribe la llave de administración para cerrar el programa. Mientras esté cerrado, nadie puede checar.</span>
+          <input type="password" id="salLlave" autocomplete="off" spellcheck="false" placeholder="Llave de administración">
+          <div><button class="btn primario" id="salCerrar" type="button">Cerrar el checador</button></div>
+          <p id="salMensaje"></p>
+        </div>
+      </div>
+    </div>
   </div>
 
 <script>
@@ -214,6 +227,7 @@
 
   const sinAcentos = (t) => t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
   const adminAbierto = () => $('admin').classList.contains('abierto');
+  const salidaAbierta = () => $('salida').classList.contains('abierto');
 
   const VISTAS = ['admLogin', 'admLista', 'admRegistro'];
   function mostrarVista(id) { for (const v of VISTAS) $(v).classList.toggle('oculto', v !== id); }
@@ -378,12 +392,51 @@
   $('admSalir').addEventListener('click', cerrarAdmin);
   $('admBuscar').addEventListener('input', pintarLista);
 
+  // ---------- Cerrar el programa ----------
+  function mensajeSalida(texto, info) {
+    $('salMensaje').textContent = texto || '';
+    $('salMensaje').classList.toggle('info', !!info);
+  }
+
+  function abrirSalida() {
+    $('salLlave').value = '';
+    mensajeSalida('');
+    $('salCerrar').disabled = false;
+    $('salida').classList.add('abierto');
+    quitarResultado();
+    enviar({ accion: 'abrirSalida' });   // mientras esta pantalla esté abierta, las capturas no checan
+    $('salLlave').focus();
+  }
+
+  function cancelarSalida() {
+    $('salida').classList.remove('abierto');
+    $('salLlave').value = '';
+    enviar({ accion: 'cancelarSalida' });
+  }
+
+  function cerrarPrograma() {
+    const llave = $('salLlave').value;
+    $('salLlave').value = '';
+    $('salCerrar').disabled = true;
+    mensajeSalida('Verificando…', true);
+    enviar({ accion: 'cerrarPrograma', llave: llave });
+  }
+
+  $('salCerrar').addEventListener('click', cerrarPrograma);
+  $('salLlave').addEventListener('keydown', (e) => { if (e.key === 'Enter') cerrarPrograma(); });
+  $('salCancelar').addEventListener('click', cancelarSalida);
+
   document.addEventListener('keydown', (e) => {
-    if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'a') {
+    const letra = (e.key || '').toLowerCase();
+    if (e.ctrlKey && e.shiftKey && letra === 'a') {
       e.preventDefault();
-      if (!adminAbierto()) abrirAdmin();
-    } else if (e.key === 'Escape' && adminAbierto()) {
-      cerrarAdmin();
+      if (!adminAbierto() && !salidaAbierta()) abrirAdmin();
+    } else if (e.ctrlKey && e.shiftKey && letra === 'q') {
+      e.preventDefault();
+      if (!adminAbierto() && !salidaAbierta()) abrirSalida();
+    } else if (e.key === 'Escape') {
+      if (salidaAbierta()) cancelarSalida();
+      else if (adminAbierto()) cerrarAdmin();
     }
   });
 
@@ -450,15 +503,20 @@
         $('cola').classList.toggle('mal', !!m.mal);
       } else if (m.tipo === 'dedo') {
         // Un dedo nuevo borra el resultado anterior para que se vea "Leyendo…"
-        if (m.puesto && !adminAbierto()) quitarResultado();
+        if (m.puesto && !adminAbierto() && !salidaAbierta()) quitarResultado();
         $('titulo').textContent = m.puesto ? 'Leyendo tu huella…' : 'Coloca tu dedo en el lector';
         if (regFase === 'captura') {
           $('regTitulo').textContent = m.puesto ? 'Leyendo…' : 'Pon el dedo en el lector';
         }
       } else if (m.tipo === 'checada') {
-        if (!adminAbierto()) mostrarResultado(m);
+        if (!adminAbierto() && !salidaAbierta()) mostrarResultado(m);
       } else if (m.tipo === 'admin') {
         mensajeDeAdmin(m);
+      } else if (m.tipo === 'salida') {
+        if (!salidaAbierta()) return;
+        mensajeSalida(m.texto);
+        $('salCerrar').disabled = false;
+        $('salLlave').focus();
       }
     });
   }
