@@ -95,6 +95,12 @@ namespace ChecadorLector
         public int? EsperadasDelDia { get; set; }
     }
 
+    // Respuesta de POST /lector/checadas/lote: un resultado por checada
+    public class RespuestaLote
+    {
+        public List<ResultadoChecada> Resultados { get; set; } = new List<ResultadoChecada>();
+    }
+
     // Mensaje que manda la pantalla (HTML) al programa
     public class MensajeUi
     {

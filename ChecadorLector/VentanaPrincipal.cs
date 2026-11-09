@@ -25,12 +25,15 @@ namespace ChecadorLector
         // Se crean con la ventana, ANTES de abrir el lector (los objetos del SDK se crean una sola vez)
         private readonly RegistroHuella _registro = new RegistroHuella();
         private readonly Identificador _identificador = new Identificador();
+        private readonly ColaChecadas _cola = new ColaChecadas();
 
         private ApiCliente _api;
         private ApiAdmin _admin;
         private LectorHuellas _lector;
         private bool _iniciado;
         private bool _actualizando;
+        private bool _vaciando;                    // enviando la cola: no se empalman dos envíos
+        private int _fallosCola;                   // envíos seguidos que la API rechazó (no por falta de red)
         private int _tokenRegistro;                // para ignorar un registro que se canceló mientras se preparaba
         private volatile bool _guardando;          // subiendo una huella: se ignoran capturas nuevas
         private volatile bool _checando;           // mandando una checada: se ignoran capturas nuevas
@@ -121,6 +124,8 @@ namespace ChecadorLector
         {
             if (_iniciado) return;
             _iniciado = true;
+
+            MostrarCola(); // por si quedaron checadas pendientes de antes de cerrar el programa
 
             IntentarIniciarLector();
             _timerLector.Start();
@@ -491,14 +496,14 @@ namespace ChecadorLector
             }
         }
 
-        // Hilo de la interfaz: manda la checada y muestra lo que contestó la API
+        // Hilo de la interfaz: manda la checada. Si no se puede, la guarda en la cola para enviarla después.
         private async Task RegistrarChecadaAsync(Identificacion quien, DateTimeOffset cuando, Guid idLocal)
         {
             try
             {
                 if (_api == null)
                 {
-                    MostrarChecada("error", "Sin conexión", "La checada NO se guardó. Avisa a tu supervisor.", "");
+                    GuardarEnCola(quien, cuando, idLocal);
                     return;
                 }
 
@@ -506,20 +511,56 @@ namespace ChecadorLector
                 // y la API queda como red de seguridad por si esa corrección estuviera vieja.
                 ResultadoChecada r = await _api.EnviarChecadaAsync(idLocal, quien.EmpleadoId, cuando, Ahora());
                 MostrarResultadoChecada(quien, cuando, r);
+
+                // Si hubo respuesta, hay conexión: se aprovecha para vaciar lo que estuviera pendiente
+                if (_cola.Cantidad > 0)
+                {
+                    Task vaciado = VaciarColaAsync();
+                }
             }
-            catch (ErrorApi ex)
+            catch (ErrorApi ex) when (NoSePuedeReintentar(ex))
             {
                 MostrarChecada("error", "No se pudo checar", ex.Message + " La checada NO se guardó.", "");
             }
             catch (Exception)
             {
-                MostrarChecada("error", "Sin conexión",
-                    "La checada NO se guardó. Avisa a tu supervisor.", "");
+                // Sin red, tiempo agotado o la API con problemas: se guarda y se manda después
+                GuardarEnCola(quien, cuando, idLocal);
             }
             finally
             {
                 _checando = false;
             }
+        }
+
+        // Errores 4xx (menos 401 y 429): reintentar no serviría de nada
+        private static bool NoSePuedeReintentar(ErrorApi ex)
+        {
+            return ex.Codigo >= 400 && ex.Codigo < 500 && ex.Codigo != 401 && ex.Codigo != 429;
+        }
+
+        private void GuardarEnCola(Identificacion quien, DateTimeOffset cuando, Guid idLocal)
+        {
+            try
+            {
+                _cola.Agregar(new ChecadaPendiente
+                {
+                    IdLocal = idLocal.ToString(),
+                    EmpleadoId = quien.EmpleadoId,
+                    FechaHora = ApiCliente.Iso(cuando)
+                });
+            }
+            catch (Exception)
+            {
+                MostrarChecada("error", "No se pudo guardar la checada",
+                    "La checada NO se guardó. Avisa a sistemas.", "");
+                return;
+            }
+
+            MostrarCola();
+            string hora = cuando.ToString("HH:mm", CultureInfo.InvariantCulture);
+            MostrarChecada("aviso", quien.Nombre, "Checada guardada sin conexión · " + hora,
+                "Se enviará cuando regrese el internet");
         }
 
         private void MostrarResultadoChecada(Identificacion quien, DateTimeOffset cuando, ResultadoChecada r)
@@ -596,6 +637,115 @@ namespace ChecadorLector
             Enviar(new { tipo = "checada", clase = clase, titulo = titulo, subtitulo = subtitulo, detalle = detalle });
         }
 
+        // ---------------------------------------------------------------- Cola de checadas pendientes
+
+        // Manda a la API las checadas guardadas, de 200 en 200, de la más vieja a la más nueva
+        private async Task VaciarColaAsync()
+        {
+            if (_vaciando || _api == null) return;
+            _vaciando = true;
+            try
+            {
+                while (_cola.Cantidad > 0)
+                {
+                    List<ChecadaPendiente> lote = _cola.Primeras(200);
+                    RespuestaLote respuesta = await _api.EnviarLoteAsync(lote, Ahora());
+
+                    // Se quitan las que la API ya resolvió. Las rechazadas con motivo reintentable
+                    // (reloj desfasado, sucursal inactiva) se conservan hasta que se arregle.
+                    var resueltas = new HashSet<string>();
+                    foreach (ResultadoChecada r in respuesta.Resultados)
+                    {
+                        if (r != null && !string.IsNullOrEmpty(r.IdLocal) && EstaResuelta(r))
+                        {
+                            resueltas.Add(r.IdLocal);
+                        }
+                    }
+
+                    _fallosCola = 0;
+                    if (resueltas.Count == 0) break; // nada avanzó: se reintenta en el próximo ciclo
+
+                    _cola.Quitar(resueltas);
+                    MostrarCola();
+                }
+            }
+            catch (ErrorApi)
+            {
+                _fallosCola++; // la API contestó pero no aceptó el envío
+            }
+            catch (Exception)
+            {
+                // Sin conexión u otra falla pasajera: se conserva todo y se reintenta
+            }
+            finally
+            {
+                _vaciando = false;
+                MostrarCola();
+            }
+        }
+
+        private static bool EstaResuelta(ResultadoChecada r)
+        {
+            switch (r.Estado)
+            {
+                case "REGISTRADA":
+                case "DUPLICADA":
+                case "REBOTE":
+                    return true;
+                case "RECHAZADA":
+                    return r.Reintentable != true; // la API ya dejó el rechazo en su bitácora
+                default:
+                    return false;
+            }
+        }
+
+        private void MostrarCola()
+        {
+            bool mal;
+            string texto = TextoCola(out mal);
+            Enviar(new { tipo = "cola", texto = texto, mal = mal });
+        }
+
+        private string TextoCola(out bool mal)
+        {
+            mal = false;
+            int pendientes = _cola.Cantidad;
+
+            if (pendientes == 0)
+            {
+                return _cola.ArchivoDanado ? "La cola de checadas anterior estaba dañada; se guardó una copia" : "";
+            }
+
+            string texto = pendientes == 1
+                ? "1 checada pendiente de enviar"
+                : pendientes + " checadas pendientes de enviar";
+
+            DateTimeOffset? masAntigua = _cola.MasAntigua();
+            if (masAntigua.HasValue)
+            {
+                TimeSpan edad = Ahora() - masAntigua.Value;
+                if (edad.TotalMinutes >= 5)
+                {
+                    texto += " (la más antigua, de hace " + Duracion(edad) + ")";
+                    mal = edad.TotalHours >= 1;
+                }
+            }
+
+            if (_fallosCola >= 3)
+            {
+                texto += " · no se pueden enviar; avisa a sistemas";
+                mal = true;
+            }
+            return texto;
+        }
+
+        private static string Duracion(TimeSpan edad)
+        {
+            return edad.TotalHours >= 1
+                ? Math.Floor(edad.TotalHours) + " h"
+                : Math.Floor(edad.TotalMinutes) + " min";
+        }
+
         // ---------------------------------------------------------------- Huellas cargadas
 
         // Baja las plantillas solo si cambiaron. Si falla se conserva lo que ya había.
@@ -661,6 +811,12 @@ namespace ChecadorLector
                 _ultimaSucursal = r.Estado.Sucursal.Nombre;
 
                 await ActualizarPlantillasAsync();
+
+                // Hay conexión: se manda lo que haya quedado pendiente
+                if (_cola.Cantidad > 0)
+                {
+                    Task vaciado = VaciarColaAsync();
+                }
 
                 TimeSpan tolerancia = TimeSpan.FromMinutes(r.Estado.Configuracion.ToleranciaRelojMin);
                 string aviso = "";

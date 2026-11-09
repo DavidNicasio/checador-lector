@@ -48,6 +48,8 @@
 
   .pie { font-size: max(10px, 1.5cqw); color: #566678; padding: .9cqw 2.4cqw; display: flex; justify-content: space-between; gap: 2cqw; border-top: 1px solid #DDE3EA; }
   #lector.mal { color: #B85400; font-weight: 600; }
+  #cola { color: #B85400; font-weight: 600; text-align: center; }
+  #cola.mal { color: var(--error); }
   #aviso { color: #B85400; font-weight: 600; text-align: right; }
 
   /* ---- Modo administrador (Ctrl+Shift+A) ---- */
@@ -111,7 +113,7 @@
         </div>
       </div>
     </div>
-    <div class="pie"><span id="info">Lector sin conexión con la API</span><span id="lector">Lector de huellas: iniciando…</span><span id="aviso"></span></div>
+    <div class="pie"><span id="info">Lector sin conexión con la API</span><span id="lector">Lector de huellas: iniciando…</span><span id="cola"></span><span id="aviso"></span></div>
 
     <!-- Modo administrador: se abre con Ctrl+Shift+A -->
     <div class="admin" id="admin">
@@ -443,6 +445,9 @@
       } else if (m.tipo === 'lector') {
         $('lector').textContent = m.texto;
         $('lector').classList.toggle('mal', !m.listo);
+      } else if (m.tipo === 'cola') {
+        $('cola').textContent = m.texto || '';
+        $('cola').classList.toggle('mal', !!m.mal);
       } else if (m.tipo === 'dedo') {
         // Un dedo nuevo borra el resultado anterior para que se vea "Leyendo…"
         if (m.puesto && !adminAbierto()) quitarResultado();
