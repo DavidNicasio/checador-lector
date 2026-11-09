@@ -10,8 +10,33 @@
     <AssemblyName>ChecadorLector</AssemblyName>
   </PropertyGroup>
 
+  <PropertyGroup>
+    <!-- Carpeta del SDK instalado en la compu. Solo se lee; las DLL no se copian al repositorio. -->
+    <DigitalPersonaBin>C:\Program Files\DigitalPersona\One Touch SDK\.NET\Bin\</DigitalPersonaBin>
+  </PropertyGroup>
+
   <ItemGroup>
     <None Update="ui\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Private=true copia las DLL a bin\ (que está en .gitignore), junto al .exe. -->
+    <Reference Include="DPFPShrNET">
+      <HintPath>$(DigitalPersonaBin)DPFPShrNET.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="DPFPDevNET">
+      <HintPath>$(DigitalPersonaBin)DPFPDevNET.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="DPFPEngNET">
+      <HintPath>$(DigitalPersonaBin)DPFPEngNET.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="DPFPVerNET">
+      <HintPath>$(DigitalPersonaBin)DPFPVerNET.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
   </ItemGroup>
 
   <ItemGroup>
@@ -19,7 +44,7 @@
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
   </ItemGroup>
 
-    <ItemGroup>
+  <ItemGroup>
     <Reference Include="System.Net.Http" />
   </ItemGroup>
 

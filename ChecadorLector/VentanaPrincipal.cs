@@ -16,8 +16,10 @@ namespace ChecadorLector
         private readonly bool _kiosco;
         private readonly WebView2 _web = new WebView2();
         private readonly System.Windows.Forms.Timer _timerEstado = new System.Windows.Forms.Timer { Interval = 30000 };
+        private readonly System.Windows.Forms.Timer _timerLector = new System.Windows.Forms.Timer { Interval = 5000 };
 
         private ApiCliente _api;
+        private LectorHuellas _lector;
         private bool _iniciado;
         private bool _actualizando;
         private string _ultimaSucursal = "Sin conectar";
@@ -48,6 +50,8 @@ namespace ChecadorLector
             Controls.Add(_web);
 
             _timerEstado.Tick += async (s, e) => await ActualizarEstadoAsync();
+            // Si el lector no estaba conectado al abrir el programa, se vuelve a intentar cada 5 s
+            _timerLector.Tick += (s, e) => IntentarIniciarLector();
         }
 
         protected override async void OnLoad(EventArgs e)
@@ -74,7 +78,7 @@ namespace ChecadorLector
                 web.Settings.IsStatusBarEnabled = false;
 
                 // Cuando la pantalla termina de cargar, ya puede recibir mensajes
-                web.NavigationCompleted += async (s, ev) => await IniciarEstadoAsync();
+                web.NavigationCompleted += async (s, ev) => await IniciarAsync();
                 web.Navigate("https://checador.local/index.html");
             }
             catch (Exception ex)
@@ -89,18 +93,60 @@ namespace ChecadorLector
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
             _timerEstado.Stop();
+            _timerLector.Stop();
+            if (_lector != null) _lector.Dispose();
             if (_api != null) _api.Dispose();
             base.OnFormClosed(e);
         }
 
-        private async Task IniciarEstadoAsync()
+        private async Task IniciarAsync()
         {
             if (_iniciado) return;
             _iniciado = true;
 
+            IntentarIniciarLector();
+            _timerLector.Start();
+
             await ActualizarEstadoAsync();
             _timerEstado.Start();
         }
+
+        // ---------------------------------------------------------------- Lector de huellas
+
+        private void IntentarIniciarLector()
+        {
+            if (_lector == null)
+            {
+                _lector = new LectorHuellas();
+                // Estos eventos llegan en el hilo del SDK: se pasan a la interfaz antes de usar la pantalla
+                _lector.LectorConectado += () => EnInterfaz(() => MostrarLector(true, "Lector de huellas listo"));
+                _lector.LectorDesconectado += () => EnInterfaz(() => MostrarLector(false, "Lector de huellas desconectado"));
+                _lector.DedoPuesto += () => EnInterfaz(() => Enviar(new { tipo = "dedo", puesto = true }));
+                _lector.DedoRetirado += () => EnInterfaz(() => Enviar(new { tipo = "dedo", puesto = false }));
+                _lector.MuestraCapturada += AlCapturarMuestra;
+            }
+
+            if (_lector.Activo) return;
+
+            string problema = _lector.Iniciar();
+            MostrarLector(problema == null, problema ?? "Lector de huellas listo");
+        }
+
+        // Corre en el hilo del SDK
+        private void AlCapturarMuestra(DPFP.Sample muestra)
+        {
+            string problema = _lector.Evaluar(muestra);
+            bool buena = problema == null;
+            string texto = buena ? "Huella leída correctamente" : problema;
+            EnInterfaz(() => Enviar(new { tipo = "lectura", buena = buena, texto = texto }));
+        }
+
+        private void MostrarLector(bool listo, string texto)
+        {
+            Enviar(new { tipo = "lector", listo = listo, texto = texto });
+        }
+
+        // ---------------------------------------------------------------- Estado de la API
 
         // Pregunta a la API cómo está este lector y se lo cuenta a la pantalla
         private async Task ActualizarEstadoAsync()
@@ -111,14 +157,36 @@ namespace ChecadorLector
             {
                 if (_api == null)
                 {
-                    Configuracion config = Configuracion.Cargar();
+                    Configuracion config;
+                    try
+                    {
+                        config = Configuracion.Cargar();
+                    }
+                    catch (Exception)
+                    {
+                        Mostrar("Sin configurar", "Sin configurar", false,
+                            "El archivo config.json tiene un error de formato. Revísalo en " + Configuracion.Ruta, "");
+                        return;
+                    }
+
                     string problema;
                     if (!config.EsValida(out problema))
                     {
                         Mostrar("Sin configurar", "Sin configurar", false, problema, "");
                         return;
                     }
-                    _api = new ApiCliente(config);
+
+                    try
+                    {
+                        _api = new ApiCliente(config);
+                    }
+                    catch (Exception)
+                    {
+                        Mostrar("Sin configurar", "Sin configurar", false,
+                            "La llave o la dirección de config.json tienen caracteres no válidos (¿un espacio o salto de línea de más?). Revísalo en "
+                            + Configuracion.Ruta, "");
+                        return;
+                    }
                 }
 
                 ResultadoEstado r = await _api.EstadoAsync();
@@ -158,6 +226,20 @@ namespace ChecadorLector
             Enviar(new { tipo = "estado", sucursal = sucursal, red = red, enLinea = enLinea, info = info, aviso = aviso });
         }
 
+        // ---------------------------------------------------------------- Utilidades
+
+        // Pasa trabajo al hilo de la interfaz; ignora si la ventana ya se cerró
+        private void EnInterfaz(Action accion)
+        {
+            if (IsDisposed || !IsHandleCreated) return;
+            try
+            {
+                BeginInvoke(accion);
+            }
+            catch (InvalidOperationException) { } // incluye ObjectDisposedException
+        }
+
+        // Solo desde el hilo de la interfaz
         private void Enviar(object mensaje)
         {
             if (_web.CoreWebView2 == null) return;
