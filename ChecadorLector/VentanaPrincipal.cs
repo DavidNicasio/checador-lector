@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using Microsoft.Web.WebView2.Core;
@@ -10,7 +12,7 @@ using Newtonsoft.Json;
 namespace ChecadorLector
 {
     // La ventana aloja la pantalla web (carpeta ui). Toda la lógica va en C#, no en la página:
-    // C# le manda mensajes a la pantalla y la pantalla solo los dibuja.
+    // C# le manda mensajes a la pantalla y la pantalla solo los dibuja (y avisa lo que el usuario pide).
     public class VentanaPrincipal : Form
     {
         private readonly bool _kiosco;
@@ -19,6 +21,7 @@ namespace ChecadorLector
         private readonly System.Windows.Forms.Timer _timerLector = new System.Windows.Forms.Timer { Interval = 5000 };
 
         private ApiCliente _api;
+        private ApiAdmin _admin;
         private LectorHuellas _lector;
         private bool _iniciado;
         private bool _actualizando;
@@ -77,6 +80,9 @@ namespace ChecadorLector
                 web.Settings.IsZoomControlEnabled = false;
                 web.Settings.IsStatusBarEnabled = false;
 
+                // Lo que la pantalla le pide al programa (por ejemplo, entrar al modo administrador)
+                web.WebMessageReceived += async (s, ev) => await AlRecibirMensajeAsync(ev.WebMessageAsJson);
+
                 // Cuando la pantalla termina de cargar, ya puede recibir mensajes
                 web.NavigationCompleted += async (s, ev) => await IniciarAsync();
                 web.Navigate("https://checador.local/index.html");
@@ -96,6 +102,7 @@ namespace ChecadorLector
             _timerLector.Stop();
             if (_lector != null) _lector.Dispose();
             if (_api != null) _api.Dispose();
+            SalirAdmin();
             base.OnFormClosed(e);
         }
 
@@ -109,6 +116,106 @@ namespace ChecadorLector
 
             await ActualizarEstadoAsync();
             _timerEstado.Start();
+        }
+
+        // ---------------------------------------------------------------- Mensajes de la pantalla
+
+        private async Task AlRecibirMensajeAsync(string json)
+        {
+            try
+            {
+                MensajeUi m = JsonConvert.DeserializeObject<MensajeUi>(json);
+                if (m == null) return;
+
+                switch (m.Accion)
+                {
+                    case "entrarAdmin":
+                        await EntrarAdminAsync(m.Llave);
+                        break;
+                    case "salirAdmin":
+                        SalirAdmin();
+                        break;
+                }
+            }
+            catch (Exception)
+            {
+                // Un mensaje mal formado no debe tirar el programa
+            }
+        }
+
+        // ---------------------------------------------------------------- Modo administrador
+
+        private async Task EntrarAdminAsync(string llave)
+        {
+            SalirAdmin(); // limpia cualquier sesión anterior
+
+            if (string.IsNullOrWhiteSpace(llave))
+            {
+                ErrorAdmin("Escribe la llave de administración.");
+                return;
+            }
+
+            try
+            {
+                Configuracion config = Configuracion.Cargar();
+                string problema;
+                if (!config.EsValida(out problema))
+                {
+                    ErrorAdmin(problema);
+                    return;
+                }
+
+                var admin = new ApiAdmin(config, llave);
+                List<ResumenHuella> lista;
+                try
+                {
+                    lista = await admin.ResumenAsync();
+                }
+                catch (Exception)
+                {
+                    admin.Dispose();
+                    throw;
+                }
+
+                _admin = admin;
+                Enviar(new
+                {
+                    tipo = "admin",
+                    fase = "lista",
+                    empleados = lista.Select(x => new
+                    {
+                        id = x.EmpleadoId,
+                        numero = x.NumeroEmpleado,
+                        nombre = x.Nombre,
+                        dedos = x.Dedos
+                    }).ToList()
+                });
+            }
+            catch (ErrorApi ex)
+            {
+                ErrorAdmin(ex.Message);
+            }
+            catch (FormatException)
+            {
+                ErrorAdmin("La llave tiene caracteres no válidos.");
+            }
+            catch (Exception)
+            {
+                ErrorAdmin("Sin conexión con la API.");
+            }
+        }
+
+        // Olvida la llave de administración
+        private void SalirAdmin()
+        {
+            if (_admin == null) return;
+            _admin.Dispose();
+            _admin = null;
+        }
+
+        private void ErrorAdmin(string texto)
+        {
+            Enviar(new { tipo = "admin", fase = "error", texto = texto });
         }
 
         // ---------------------------------------------------------------- Lector de huellas

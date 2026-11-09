@@ -34,6 +34,27 @@
   .pie { font-size: max(10px, 1.5cqw); color: #566678; padding: .9cqw 2.4cqw; display: flex; justify-content: space-between; gap: 2cqw; border-top: 1px solid #DDE3EA; }
   #lector.mal { color: #B85400; font-weight: 600; }
   #aviso { color: #B85400; font-weight: 600; text-align: right; }
+
+  /* ---- Modo administrador (Ctrl+Shift+A) ---- */
+  .oculto { display: none !important; }
+  .admin { position: fixed; inset: 0; background: var(--fondo); z-index: 10; display: none; grid-template-rows: auto minmax(0, 1fr); user-select: text; }
+  .admin.abierto { display: grid; }
+  .admin-top { background: #12344F; color: #fff; display: flex; justify-content: space-between; align-items: center; padding: 1.1cqw 2.4cqw; font-size: max(14px, 1.9cqw); }
+  .admin-cuerpo { padding: 2cqw 4cqw; display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 1.2cqw; min-height: 0; font-size: max(13px, 1.5cqw); }
+  .admin-login { max-width: 46cqw; display: grid; gap: 1cqw; align-content: start; }
+  .admin input { font: inherit; padding: .8cqw 1cqw; border: 1px solid #B8C4D0; border-radius: .5cqw; background: #fff; color: var(--tinta); }
+  .btn { font: inherit; padding: .7cqw 1.6cqw; border-radius: .5cqw; border: 1px solid #B8C4D0; background: #fff; color: var(--tinta); cursor: pointer; }
+  .btn.primario { background: var(--azul); border-color: var(--azul); color: #fff; }
+  .btn:disabled { opacity: .5; cursor: default; }
+  #admMensaje { margin: 0; min-height: 1.6em; color: var(--error); font-weight: 600; }
+  #admMensaje.info { color: #4A5B6C; font-weight: 400; }
+  .admin-lista { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 1cqw; min-height: 0; }
+  .admin-filas { overflow: auto; background: #fff; border: 1px solid #D8DFE7; border-radius: .6cqw; }
+  .fila { display: grid; grid-template-columns: 8cqw 1fr auto; gap: 1.2cqw; align-items: center; padding: .8cqw 1.4cqw; border-bottom: 1px solid #EDF1F5; }
+  .fila:last-child { border-bottom: 0; }
+  .num { color: #566678; font-variant-numeric: tabular-nums; }
+  .chip { display: inline-block; margin-left: .5cqw; padding: .15cqw .9cqw; border-radius: 99px; background: #E3EEF8; color: var(--azul); font-size: .9em; }
+  .chip.falta { background: #FFF0E0; color: #B85400; }
 </style>
 </head>
 <body>
@@ -49,11 +70,29 @@
       </div>
     </div>
     <div class="pie"><span id="info">Lector sin conexión con la API</span><span id="lector">Lector de huellas: iniciando…</span><span id="aviso"></span></div>
+
+    <!-- Modo administrador: se abre con Ctrl+Shift+A -->
+    <div class="admin" id="admin">
+      <div class="admin-top"><b>Modo administrador</b><button class="btn" id="admSalir" type="button">Salir</button></div>
+      <div class="admin-cuerpo">
+        <div class="admin-login" id="admLogin">
+          <span>Escribe la llave de administración para registrar huellas.</span>
+          <input type="password" id="admLlave" autocomplete="off" spellcheck="false" placeholder="Llave de administración">
+          <div><button class="btn primario" id="admEntrar" type="button">Entrar</button></div>
+          <p id="admMensaje"></p>
+        </div>
+        <div class="admin-lista oculto" id="admLista">
+          <input type="text" id="admBuscar" autocomplete="off" spellcheck="false" placeholder="Buscar por nombre o número de empleado">
+          <div class="admin-filas" id="admFilas"></div>
+        </div>
+      </div>
+    </div>
   </div>
 
 <script>
   const $ = (id) => document.getElementById(id);
   const pad = (n) => String(n).padStart(2, '0');
+  const enviar = (obj) => { if (window.chrome && window.chrome.webview) window.chrome.webview.postMessage(obj); };
 
   function tick() {
     const d = new Date();
@@ -64,9 +103,97 @@
   tick();
   setInterval(tick, 250);
 
+  // ---------- Modo administrador ----------
+  const NOMBRES_DEDO = ['Pulgar der.', 'Índice der.', 'Medio der.', 'Anular der.', 'Meñique der.',
+                        'Pulgar izq.', 'Índice izq.', 'Medio izq.', 'Anular izq.', 'Meñique izq.'];
+  let empleados = [];
+
+  const sinAcentos = (t) => t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  const adminAbierto = () => $('admin').classList.contains('abierto');
+
+  function mensajeAdmin(texto, info) {
+    $('admMensaje').textContent = texto || '';
+    $('admMensaje').classList.toggle('info', !!info);
+  }
+
+  function abrirAdmin() {
+    empleados = [];
+    $('admFilas').textContent = '';
+    $('admBuscar').value = '';
+    $('admLlave').value = '';
+    mensajeAdmin('');
+    $('admLogin').classList.remove('oculto');
+    $('admLista').classList.add('oculto');
+    $('admEntrar').disabled = false;
+    $('admin').classList.add('abierto');
+    $('admLlave').focus();
+  }
+
+  function cerrarAdmin() {
+    $('admin').classList.remove('abierto');
+    $('admLlave').value = '';
+    $('admFilas').textContent = '';
+    empleados = [];
+    enviar({ accion: 'salirAdmin' });
+  }
+
+  function entrarAdmin() {
+    const llave = $('admLlave').value;
+    $('admLlave').value = '';
+    $('admEntrar').disabled = true;
+    mensajeAdmin('Verificando…', true);
+    enviar({ accion: 'entrarAdmin', llave: llave });
+  }
+
+  function pintarLista() {
+    const q = sinAcentos($('admBuscar').value.trim());
+    const cont = $('admFilas');
+    cont.textContent = '';
+    const visibles = empleados.filter((e) => !q || sinAcentos(e.nombre).includes(q) || sinAcentos(e.numero).includes(q));
+    if (!visibles.length) {
+      const vacio = document.createElement('div');
+      vacio.className = 'fila';
+      vacio.textContent = empleados.length ? 'Sin resultados' : 'No hay empleados activos';
+      cont.appendChild(vacio);
+      return;
+    }
+    for (const e of visibles) {
+      const fila = document.createElement('div');
+      fila.className = 'fila';
+      const num = document.createElement('span'); num.className = 'num'; num.textContent = e.numero;
+      const nom = document.createElement('span'); nom.textContent = e.nombre;
+      const dedos = document.createElement('span');
+      if (!e.dedos.length) {
+        const c = document.createElement('span'); c.className = 'chip falta'; c.textContent = 'Sin huella';
+        dedos.appendChild(c);
+      } else {
+        for (const d of e.dedos) {
+          const c = document.createElement('span'); c.className = 'chip'; c.textContent = NOMBRES_DEDO[d - 1] || ('Dedo ' + d);
+          dedos.appendChild(c);
+        }
+      }
+      fila.append(num, nom, dedos);
+      cont.appendChild(fila);
+    }
+  }
+
+  $('admEntrar').addEventListener('click', entrarAdmin);
+  $('admLlave').addEventListener('keydown', (e) => { if (e.key === 'Enter') entrarAdmin(); });
+  $('admSalir').addEventListener('click', cerrarAdmin);
+  $('admBuscar').addEventListener('input', pintarLista);
+
+  document.addEventListener('keydown', (e) => {
+    if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'a') {
+      e.preventDefault();
+      if (!adminAbierto()) abrirAdmin();
+    } else if (e.key === 'Escape' && adminAbierto()) {
+      cerrarAdmin();
+    }
+  });
+
+  // ---------- Mensajes que manda el programa (C#) ----------
   let temporizadorLectura;
 
-  // Mensajes que manda el programa (C#)
   if (window.chrome && window.chrome.webview) {
     window.chrome.webview.addEventListener('message', (e) => {
       const m = e.data;
@@ -87,6 +214,20 @@
         l.className = 's ' + (m.buena ? 'ok' : 'err');
         clearTimeout(temporizadorLectura);
         temporizadorLectura = setTimeout(() => { l.textContent = ''; l.className = 's'; }, 3000);
+      } else if (m.tipo === 'admin') {
+        if (!adminAbierto()) return;
+        if (m.fase === 'error') {
+          mensajeAdmin(m.texto);
+          $('admEntrar').disabled = false;
+          $('admLlave').focus();
+        } else if (m.fase === 'lista') {
+          empleados = m.empleados || [];
+          mensajeAdmin('');
+          $('admLogin').classList.add('oculto');
+          $('admLista').classList.remove('oculto');
+          pintarLista();
+          $('admBuscar').focus();
+        }
       }
     });
   }

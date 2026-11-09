@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace ChecadorLector
 {
@@ -37,6 +38,22 @@ namespace ChecadorLector
 
         // Hora del servidor menos hora de esta PC. Positivo = la PC va atrasada.
         public TimeSpan Desfase { get; set; }
+    }
+
+    // Un empleado activo y los dedos que ya tiene registrados (GET /huellas/resumen)
+    public class ResumenHuella
+    {
+        public int EmpleadoId { get; set; }
+        public string NumeroEmpleado { get; set; }
+        public string Nombre { get; set; }
+        public List<int> Dedos { get; set; } = new List<int>();
+    }
+
+    // Mensaje que manda la pantalla (HTML) al programa
+    public class MensajeUi
+    {
+        public string Accion { get; set; }
+        public string Llave { get; set; }
     }
 
     // La API contestó, pero con un error (por ejemplo 401: llave inválida)
