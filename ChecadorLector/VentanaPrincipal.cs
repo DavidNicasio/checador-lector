@@ -26,6 +26,7 @@ namespace ChecadorLector
         private readonly RegistroHuella _registro = new RegistroHuella();
         private readonly Identificador _identificador = new Identificador();
         private readonly ColaChecadas _cola = new ColaChecadas();
+        private readonly AvisosLector _avisos = new AvisosLector();
 
         private ApiCliente _api;
         private ApiAdmin _admin;
@@ -33,6 +34,9 @@ namespace ChecadorLector
         private bool _iniciado;
         private bool _actualizando;
         private bool _vaciando;                    // enviando la cola: no se empalman dos envíos
+        private bool _enviandoAvisos;              // mandando avisos del lector: no se empalman dos envíos
+        private bool _lectorSeDesconecto;          // para avisar cuando el lector regresa
+        private bool _falloInicioReportado;        // el lector no pudo iniciar y ya se avisó
         private int _fallosCola;                   // envíos seguidos que la API rechazó (no por falta de red)
         private int _tokenRegistro;                // para ignorar un registro que se canceló mientras se preparaba
         private volatile bool _guardando;          // subiendo una huella: se ignoran capturas nuevas
@@ -127,11 +131,20 @@ namespace ChecadorLector
 
             MostrarCola(); // por si quedaron checadas pendientes de antes de cerrar el programa
 
+            // Aviso de que el programa arrancó (sale a la API en cuanto haya conexión)
+            _avisos.Agregar("INICIO", TextoInicio(), DateTimeOffset.Now);
+
             IntentarIniciarLector();
             _timerLector.Start();
 
             await ActualizarEstadoAsync();
             _timerEstado.Start();
+        }
+
+        private static string TextoInicio()
+        {
+            string version = typeof(VentanaPrincipal).Assembly.GetName().Version.ToString();
+            return "Programa iniciado en " + Environment.MachineName + " (versión " + version + ")";
         }
 
         // ---------------------------------------------------------------- Mensajes de la pantalla
@@ -318,6 +331,7 @@ namespace ChecadorLector
             }
             catch (Exception)
             {
+                _avisos.Agregar("ERROR_LECTOR", "Error del lector durante el registro de una huella", Ahora());
                 EnInterfaz(() => Enviar(new
                 {
                     tipo = "admin", fase = "captura", ok = false, faltan = -1,
@@ -403,8 +417,21 @@ namespace ChecadorLector
             {
                 _lector = new LectorHuellas();
                 // Estos eventos llegan en el hilo del SDK: se pasan a la interfaz antes de usar la pantalla
-                _lector.LectorConectado += () => EnInterfaz(() => MostrarLector(true, "Lector de huellas listo"));
-                _lector.LectorDesconectado += () => EnInterfaz(() => MostrarLector(false, "Lector de huellas desconectado"));
+                _lector.LectorConectado += () => EnInterfaz(() =>
+                {
+                    MostrarLector(true, "Lector de huellas listo");
+                    if (_lectorSeDesconecto)
+                    {
+                        _lectorSeDesconecto = false;
+                        _avisos.Agregar("OTRO", "Lector de huellas conectado de nuevo", Ahora());
+                    }
+                });
+                _lector.LectorDesconectado += () => EnInterfaz(() =>
+                {
+                    MostrarLector(false, "Lector de huellas desconectado");
+                    _lectorSeDesconecto = true;
+                    _avisos.Agregar("ERROR_LECTOR", "Lector de huellas desconectado", Ahora());
+                });
                 _lector.DedoPuesto += () => EnInterfaz(() => Enviar(new { tipo = "dedo", puesto = true }));
                 _lector.DedoRetirado += () => EnInterfaz(() => Enviar(new { tipo = "dedo", puesto = false }));
                 _lector.MuestraCapturada += AlCapturarMuestra;
@@ -414,6 +441,21 @@ namespace ChecadorLector
 
             string problema = _lector.Iniciar();
             MostrarLector(problema == null, problema ?? "Lector de huellas listo");
+
+            // Un fallo al iniciar se avisa una sola vez (este método se reintenta cada 5 s)
+            if (problema != null)
+            {
+                if (!_falloInicioReportado)
+                {
+                    _falloInicioReportado = true;
+                    _avisos.Agregar("ERROR_LECTOR", problema, Ahora());
+                }
+            }
+            else if (_falloInicioReportado)
+            {
+                _falloInicioReportado = false;
+                _avisos.Agregar("OTRO", "Lector de huellas listo después de un fallo al iniciar", Ahora());
+            }
         }
 
         // Corre en el hilo del SDK
@@ -459,6 +501,7 @@ namespace ChecadorLector
             }
             catch (Exception)
             {
+                _avisos.Agregar("ERROR_LECTOR", "Error del lector al identificar una huella", Ahora());
                 EnInterfaz(() => MostrarChecada("error", "Error del lector", "Vuelve a poner el dedo", ""));
                 return;
             }
@@ -475,11 +518,14 @@ namespace ChecadorLector
                     break;
 
                 case EstadoIdentificacion.NoReconocida:
+                    _avisos.NoReconocida(Ahora());
                     EnInterfaz(() => MostrarChecada("aviso", "No te reconocí",
                         "Limpia y seca el dedo y vuelve a intentarlo", ""));
                     break;
 
                 case EstadoIdentificacion.Multiple:
+                    _avisos.Agregar("COINCIDENCIA_MULTIPLE",
+                        "Una huella coincidió con más de un empleado", Ahora());
                     EnInterfaz(() => MostrarChecada("error", "Huella no válida para checar",
                         "Avisa a sistemas", ""));
                     break;
@@ -746,6 +792,40 @@ namespace ChecadorLector
                 : Math.Floor(edad.TotalMinutes) + " min";
         }
 
+        // ---------------------------------------------------------------- Avisos del lector
+
+        // Manda a la API los avisos que se juntaron. Si falla, se quedan para el siguiente ciclo.
+        private async Task EnviarAvisosAsync()
+        {
+            if (_enviandoAvisos || _api == null) return;
+            _enviandoAvisos = true;
+            try
+            {
+                List<AvisoPendiente> lista = _avisos.Tomar(Ahora());
+                for (int i = 0; i < lista.Count; i++)
+                {
+                    try
+                    {
+                        await _api.EnviarEventoAsync(lista[i].Tipo, lista[i].Detalle, lista[i].FechaHora);
+                    }
+                    catch (ErrorApi ex) when (NoSePuedeReintentar(ex))
+                    {
+                        // La API lo rechazó por su contenido: reintentar no serviría, se descarta
+                    }
+                    catch (Exception)
+                    {
+                        // Sin conexión, límite de envíos o llave inválida: este y los que faltan se conservan
+                        _avisos.Devolver(lista.Skip(i));
+                        break;
+                    }
+                }
+            }
+            finally
+            {
+                _enviandoAvisos = false;
+            }
+        }
+
         // ---------------------------------------------------------------- Huellas cargadas
 
         // Baja las plantillas solo si cambiaron. Si falla se conserva lo que ya había.
@@ -817,6 +897,7 @@ namespace ChecadorLector
                 {
                     Task vaciado = VaciarColaAsync();
                 }
+                Task avisos = EnviarAvisosAsync();
 
                 TimeSpan tolerancia = TimeSpan.FromMinutes(r.Estado.Configuracion.ToleranciaRelojMin);
                 string aviso = "";

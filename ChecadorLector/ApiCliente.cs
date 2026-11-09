@@ -185,6 +185,38 @@ namespace ChecadorLector
             }
         }
 
+        // Avisa a la API de un evento del lector (la API contesta 204, sin cuerpo).
+        // tipo: INICIO, NO_RECONOCIDA, COINCIDENCIA_MULTIPLE, ERROR_LECTOR u OTRO.
+        // El detalle es texto corto: nunca datos biométricos.
+        public async Task EnviarEventoAsync(string tipo, string detalle, DateTimeOffset fechaHora)
+        {
+            string json = JsonConvert.SerializeObject(new
+            {
+                tipo = tipo,
+                detalle = detalle,
+                fechaHora = Iso(fechaHora)
+            });
+
+            using (var limite = new CancellationTokenSource(TimeSpan.FromSeconds(5)))
+            using (var contenido = new StringContent(json, Encoding.UTF8, "application/json"))
+            using (HttpResponseMessage respuesta = await _http.PostAsync("lector/eventos", contenido, limite.Token))
+            {
+                int codigo = (int)respuesta.StatusCode;
+                if (codigo == 401)
+                {
+                    throw new ErrorApi("La llave del lector no es válida o está desactivada.", 401);
+                }
+                if (codigo == 429)
+                {
+                    throw new ErrorApi("Demasiados avisos seguidos.", 429);
+                }
+                if (!respuesta.IsSuccessStatusCode)
+                {
+                    throw new ErrorApi("La API no aceptó el aviso (código " + codigo + ").", codigo);
+                }
+            }
+        }
+
         public void Dispose()
         {
             _http.Dispose();
