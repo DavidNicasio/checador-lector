@@ -25,9 +25,9 @@
   .tarjeta { border-radius: 1cqw; display: grid; align-content: center; justify-items: center; text-align: center; gap: .4cqw; padding: .8cqw 3cqw; background: #fff; border: .2cqw solid #D8DFE7; color: var(--azul); }
   .t { font-size: 3.2cqw; font-weight: 600; margin: 0; line-height: 1.15; }
   .s { font-size: 2cqw; margin: 0; line-height: 1.25; color: #4A5B6C; }
+  .s.ok { color: var(--ok); font-weight: 600; }
+  .s.err { color: var(--error); font-weight: 600; }
   #lectura { min-height: 2.6cqw; }
-  #lectura.ok { color: var(--ok); font-weight: 600; }
-  #lectura.err { color: var(--error); font-weight: 600; }
   .huella { width: 6.4cqw; height: 6.4cqw; animation: latido 2.2s ease-in-out infinite; }
   @keyframes latido { 0%, 100% { opacity: .55; transform: scale(.96); } 50% { opacity: 1; transform: scale(1.04); } }
   @media (prefers-reduced-motion: reduce) { .huella { animation: none; } }
@@ -40,7 +40,7 @@
   .admin { position: fixed; inset: 0; background: var(--fondo); z-index: 10; display: none; grid-template-rows: auto minmax(0, 1fr); user-select: text; }
   .admin.abierto { display: grid; }
   .admin-top { background: #12344F; color: #fff; display: flex; justify-content: space-between; align-items: center; padding: 1.1cqw 2.4cqw; font-size: max(14px, 1.9cqw); }
-  .admin-cuerpo { padding: 2cqw 4cqw; display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 1.2cqw; min-height: 0; font-size: max(13px, 1.5cqw); }
+  .admin-cuerpo { padding: 2cqw 4cqw; display: grid; grid-template-rows: minmax(0, 1fr); min-height: 0; font-size: max(13px, 1.5cqw); }
   .admin-login { max-width: 46cqw; display: grid; gap: 1cqw; align-content: start; }
   .admin input { font: inherit; padding: .8cqw 1cqw; border: 1px solid #B8C4D0; border-radius: .5cqw; background: #fff; color: var(--tinta); }
   .btn { font: inherit; padding: .7cqw 1.6cqw; border-radius: .5cqw; border: 1px solid #B8C4D0; background: #fff; color: var(--tinta); cursor: pointer; }
@@ -52,9 +52,27 @@
   .admin-filas { overflow: auto; background: #fff; border: 1px solid #D8DFE7; border-radius: .6cqw; }
   .fila { display: grid; grid-template-columns: 8cqw 1fr auto; gap: 1.2cqw; align-items: center; padding: .8cqw 1.4cqw; border-bottom: 1px solid #EDF1F5; }
   .fila:last-child { border-bottom: 0; }
+  .fila.clic { cursor: pointer; }
+  .fila.clic:hover { background: #F0F5FA; }
   .num { color: #566678; font-variant-numeric: tabular-nums; }
   .chip { display: inline-block; margin-left: .5cqw; padding: .15cqw .9cqw; border-radius: 99px; background: #E3EEF8; color: var(--azul); font-size: .9em; }
   .chip.falta { background: #FFF0E0; color: #B85400; }
+
+  /* ---- Registro de huella ---- */
+  .admin-reg { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 1.2cqw; min-height: 0; }
+  .reg-cab { display: flex; justify-content: space-between; align-items: center; gap: 2cqw; font-size: max(15px, 2cqw); }
+  .reg-caja { background: #fff; border: 1px solid #D8DFE7; border-radius: .8cqw; padding: 2.4cqw; display: grid; gap: 1.4cqw; align-content: center; justify-items: center; text-align: center; }
+  .reg-caja select { font: inherit; padding: .7cqw 1cqw; border: 1px solid #B8C4D0; border-radius: .5cqw; background: #fff; color: var(--tinta); }
+  .reg-caja p { margin: 0; }
+  .reg-titulo { font-size: max(18px, 3cqw); font-weight: 600; color: var(--azul); }
+  .reg-titulo.err { color: var(--error); }
+  .reg-titulo.ok { color: var(--ok); }
+  .reg-ayuda { color: #4A5B6C; max-width: 60cqw; }
+  .pasos { display: flex; gap: 1.2cqw; }
+  .paso { width: 3cqw; height: 3cqw; border-radius: 50%; border: .3cqw solid #B8C4D0; }
+  .paso.hecho { background: var(--ok); border-color: var(--ok); }
+  #regEstado { min-height: 2.6em; max-width: 60cqw; }
+  .botones { display: flex; gap: 1.2cqw; justify-content: center; }
 </style>
 </head>
 <body>
@@ -75,16 +93,48 @@
     <div class="admin" id="admin">
       <div class="admin-top"><b>Modo administrador</b><button class="btn" id="admSalir" type="button">Salir</button></div>
       <div class="admin-cuerpo">
+
         <div class="admin-login" id="admLogin">
           <span>Escribe la llave de administración para registrar huellas.</span>
           <input type="password" id="admLlave" autocomplete="off" spellcheck="false" placeholder="Llave de administración">
           <div><button class="btn primario" id="admEntrar" type="button">Entrar</button></div>
           <p id="admMensaje"></p>
         </div>
+
         <div class="admin-lista oculto" id="admLista">
-          <input type="text" id="admBuscar" autocomplete="off" spellcheck="false" placeholder="Buscar por nombre o número de empleado">
+          <input type="text" id="admBuscar" autocomplete="off" spellcheck="false" placeholder="Buscar por nombre o número de empleado (toca un empleado para registrar su huella)">
           <div class="admin-filas" id="admFilas"></div>
         </div>
+
+        <div class="admin-reg oculto" id="admRegistro">
+          <div class="reg-cab">
+            <div><b id="regNombre"></b> <span class="num" id="regNumero"></span></div>
+            <button class="btn" id="regVolver" type="button">← Volver a la lista</button>
+          </div>
+
+          <div class="reg-caja" id="regElegir">
+            <label>Dedo a registrar: <select id="regDedo"></select></label>
+            <p class="reg-ayuda">Se hacen 4 capturas del mismo dedo. Después de cada una, levanta el dedo y vuelve a ponerlo, moviéndolo un poquito para que el lector vea otra parte de la huella. Se recomiendan 2 dedos por empleado.</p>
+            <div><button class="btn primario" id="regComenzar" type="button">Comenzar</button></div>
+          </div>
+
+          <div class="reg-caja oculto" id="regCaptura">
+            <p class="reg-titulo" id="regTitulo">Preparando…</p>
+            <div class="pasos" id="regPasos"></div>
+            <p class="s" id="regEstado"></p>
+            <div><button class="btn" id="regCancelar" type="button">Cancelar</button></div>
+          </div>
+
+          <div class="reg-caja oculto" id="regFin">
+            <p class="reg-titulo" id="regFinTitulo"></p>
+            <p class="reg-ayuda" id="regFinTexto"></p>
+            <div class="botones">
+              <button class="btn primario" id="regOtro" type="button">Registrar otro dedo</button>
+              <button class="btn" id="regLista" type="button">Volver a la lista</button>
+            </div>
+          </div>
+        </div>
+
       </div>
     </div>
   </div>
@@ -106,10 +156,20 @@
   // ---------- Modo administrador ----------
   const NOMBRES_DEDO = ['Pulgar der.', 'Índice der.', 'Medio der.', 'Anular der.', 'Meñique der.',
                         'Pulgar izq.', 'Índice izq.', 'Medio izq.', 'Anular izq.', 'Meñique izq.'];
+  const NOMBRES_DEDO_LARGO = ['Pulgar derecho', 'Índice derecho', 'Medio derecho', 'Anular derecho', 'Meñique derecho',
+                              'Pulgar izquierdo', 'Índice izquierdo', 'Medio izquierdo', 'Anular izquierdo', 'Meñique izquierdo'];
   let empleados = [];
+  let empActual = null;
+  let regFase = 'ninguna';   // ninguna | elegir | preparando | captura | guardando | fin
+  let regTotal = 4;
 
   const sinAcentos = (t) => t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
   const adminAbierto = () => $('admin').classList.contains('abierto');
+
+  const VISTAS = ['admLogin', 'admLista', 'admRegistro'];
+  function mostrarVista(id) { for (const v of VISTAS) $(v).classList.toggle('oculto', v !== id); }
+  const CAJAS = ['regElegir', 'regCaptura', 'regFin'];
+  function mostrarCaja(id) { for (const c of CAJAS) $(c).classList.toggle('oculto', c !== id); }
 
   function mensajeAdmin(texto, info) {
     $('admMensaje').textContent = texto || '';
@@ -118,12 +178,13 @@
 
   function abrirAdmin() {
     empleados = [];
+    empActual = null;
+    regFase = 'ninguna';
     $('admFilas').textContent = '';
     $('admBuscar').value = '';
     $('admLlave').value = '';
     mensajeAdmin('');
-    $('admLogin').classList.remove('oculto');
-    $('admLista').classList.add('oculto');
+    mostrarVista('admLogin');
     $('admEntrar').disabled = false;
     $('admin').classList.add('abierto');
     $('admLlave').focus();
@@ -134,6 +195,8 @@
     $('admLlave').value = '';
     $('admFilas').textContent = '';
     empleados = [];
+    empActual = null;
+    regFase = 'ninguna';
     enviar({ accion: 'salirAdmin' });
   }
 
@@ -159,7 +222,7 @@
     }
     for (const e of visibles) {
       const fila = document.createElement('div');
-      fila.className = 'fila';
+      fila.className = 'fila clic';
       const num = document.createElement('span'); num.className = 'num'; num.textContent = e.numero;
       const nom = document.createElement('span'); nom.textContent = e.nombre;
       const dedos = document.createElement('span');
@@ -173,9 +236,91 @@
         }
       }
       fila.append(num, nom, dedos);
+      fila.addEventListener('click', () => abrirRegistro(e));
       cont.appendChild(fila);
     }
   }
+
+  // ---------- Registro de huella ----------
+  function llenarDedos() {
+    const sel = $('regDedo');
+    sel.textContent = '';
+    NOMBRES_DEDO_LARGO.forEach((nombre, i) => {
+      const o = document.createElement('option');
+      o.value = String(i + 1);
+      o.textContent = nombre + (empActual.dedos.includes(i + 1) ? ' (ya registrado, se reemplaza)' : '');
+      sel.appendChild(o);
+    });
+    // Primero los índices, luego medios, pulgares... el primero que todavía no tenga huella
+    const orden = [2, 7, 3, 8, 1, 6, 4, 9, 5, 10];
+    const libre = orden.find((d) => !empActual.dedos.includes(d));
+    sel.value = String(libre || 2);
+  }
+
+  function mostrarElegir() {
+    regFase = 'elegir';
+    llenarDedos();
+    mostrarCaja('regElegir');
+  }
+
+  function abrirRegistro(e) {
+    empActual = e;
+    $('regNombre').textContent = e.nombre;
+    $('regNumero').textContent = '· ' + e.numero;
+    mostrarVista('admRegistro');
+    mostrarElegir();
+  }
+
+  function volverLista() {
+    if (regFase === 'preparando' || regFase === 'captura') enviar({ accion: 'cancelarRegistro' });
+    regFase = 'ninguna';
+    empActual = null;
+    mostrarVista('admLista');
+    pintarLista();
+    $('admBuscar').focus();
+  }
+
+  function estadoReg(texto, clase) {
+    $('regEstado').textContent = texto || '';
+    $('regEstado').className = 's' + (clase ? ' ' + clase : '');
+  }
+
+  function pintarPasos(hechas) {
+    const c = $('regPasos');
+    c.textContent = '';
+    for (let i = 0; i < regTotal; i++) {
+      const p = document.createElement('span');
+      p.className = 'paso' + (i < hechas ? ' hecho' : '');
+      c.appendChild(p);
+    }
+  }
+
+  function mostrarFin(titulo, texto, ok) {
+    regFase = 'fin';
+    $('regFinTitulo').textContent = titulo;
+    $('regFinTitulo').className = 'reg-titulo ' + (ok ? 'ok' : 'err');
+    $('regFinTexto').textContent = texto;
+    $('regOtro').textContent = ok ? 'Registrar otro dedo' : 'Intentar de nuevo';
+    mostrarCaja('regFin');
+  }
+
+  $('regComenzar').addEventListener('click', () => {
+    regFase = 'preparando';
+    mostrarCaja('regCaptura');
+    $('regTitulo').textContent = 'Preparando…';
+    $('regPasos').textContent = '';
+    estadoReg('Descargando las huellas ya registradas para compararlas.');
+    $('regCancelar').disabled = false;
+    enviar({ accion: 'iniciarRegistro', empleadoId: empActual.id, dedo: Number($('regDedo').value) });
+  });
+
+  $('regCancelar').addEventListener('click', () => {
+    enviar({ accion: 'cancelarRegistro' });
+    mostrarElegir();
+  });
+  $('regVolver').addEventListener('click', volverLista);
+  $('regLista').addEventListener('click', volverLista);
+  $('regOtro').addEventListener('click', mostrarElegir);
 
   $('admEntrar').addEventListener('click', entrarAdmin);
   $('admLlave').addEventListener('keydown', (e) => { if (e.key === 'Enter') entrarAdmin(); });
@@ -194,6 +339,51 @@
   // ---------- Mensajes que manda el programa (C#) ----------
   let temporizadorLectura;
 
+  function mensajeDeAdmin(m) {
+    if (!adminAbierto()) return;
+
+    if (m.fase === 'error') {
+      mensajeAdmin(m.texto);
+      $('admEntrar').disabled = false;
+      $('admLlave').focus();
+    } else if (m.fase === 'lista') {
+      empleados = m.empleados || [];
+      mensajeAdmin('');
+      mostrarVista('admLista');
+      pintarLista();
+      $('admBuscar').focus();
+    } else if (m.fase === 'registroListo') {
+      if (regFase !== 'preparando') return;
+      regFase = 'captura';
+      regTotal = m.total || 4;
+      pintarPasos(0);
+      $('regTitulo').textContent = 'Pon el dedo en el lector';
+      estadoReg('Cada vez que el lector parpadee, levanta el dedo y vuelve a ponerlo.');
+    } else if (m.fase === 'captura') {
+      if (regFase !== 'captura') return;
+      if (m.ok) {
+        pintarPasos(regTotal - m.faltan);
+        estadoReg(m.texto + ' · levanta el dedo y vuelve a ponerlo', 'ok');
+      } else {
+        if (m.faltan >= 0) pintarPasos(regTotal - m.faltan);
+        estadoReg(m.texto, 'err');
+      }
+    } else if (m.fase === 'guardando') {
+      regFase = 'guardando';
+      $('regTitulo').textContent = 'Guardando huella…';
+      estadoReg('');
+      $('regCancelar').disabled = true;
+    } else if (m.fase === 'guardado') {
+      empleados = m.empleados || empleados;
+      empActual = empleados.find((x) => x.id === m.empleadoId) || empActual;
+      mostrarFin('Huella guardada',
+        NOMBRES_DEDO_LARGO[m.dedo - 1] + ' de ' + empActual.nombre + '.', true);
+    } else if (m.fase === 'registroError') {
+      if (regFase === 'ninguna' || regFase === 'elegir') return;
+      mostrarFin('No se pudo registrar', m.texto, false);
+    }
+  }
+
   if (window.chrome && window.chrome.webview) {
     window.chrome.webview.addEventListener('message', (e) => {
       const m = e.data;
@@ -208,6 +398,9 @@
         $('lector').classList.toggle('mal', !m.listo);
       } else if (m.tipo === 'dedo') {
         $('titulo').textContent = m.puesto ? 'Leyendo tu huella…' : 'Coloca tu dedo en el lector';
+        if (regFase === 'captura') {
+          $('regTitulo').textContent = m.puesto ? 'Leyendo…' : 'Pon el dedo en el lector';
+        }
       } else if (m.tipo === 'lectura') {
         const l = $('lectura');
         l.textContent = m.texto;
@@ -215,19 +408,7 @@
         clearTimeout(temporizadorLectura);
         temporizadorLectura = setTimeout(() => { l.textContent = ''; l.className = 's'; }, 3000);
       } else if (m.tipo === 'admin') {
-        if (!adminAbierto()) return;
-        if (m.fase === 'error') {
-          mensajeAdmin(m.texto);
-          $('admEntrar').disabled = false;
-          $('admLlave').focus();
-        } else if (m.fase === 'lista') {
-          empleados = m.empleados || [];
-          mensajeAdmin('');
-          $('admLogin').classList.add('oculto');
-          $('admLista').classList.remove('oculto');
-          pintarLista();
-          $('admBuscar').focus();
-        }
+        mensajeDeAdmin(m);
       }
     });
   }

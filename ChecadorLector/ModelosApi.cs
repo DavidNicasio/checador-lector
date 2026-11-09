@@ -49,11 +49,30 @@ namespace ChecadorLector
         public List<int> Dedos { get; set; } = new List<int>();
     }
 
+    // Una plantilla descargada de GET /lector/plantillas (Plantilla va en base64)
+    public class PlantillaRemota
+    {
+        public int EmpleadoId { get; set; }
+        public string NumeroEmpleado { get; set; }
+        public string Nombre { get; set; }
+        public int Dedo { get; set; }
+        public string Plantilla { get; set; }
+    }
+
+    public class RespuestaPlantillas
+    {
+        public string Version { get; set; }
+        public bool SinCambios { get; set; }
+        public List<PlantillaRemota> Plantillas { get; set; } = new List<PlantillaRemota>();
+    }
+
     // Mensaje que manda la pantalla (HTML) al programa
     public class MensajeUi
     {
         public string Accion { get; set; }
         public string Llave { get; set; }
+        public int EmpleadoId { get; set; }
+        public int Dedo { get; set; }
     }
 
     // La API contestó, pero con un error (por ejemplo 401: llave inválida)

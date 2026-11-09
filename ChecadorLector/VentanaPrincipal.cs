@@ -20,11 +20,16 @@ namespace ChecadorLector
         private readonly System.Windows.Forms.Timer _timerEstado = new System.Windows.Forms.Timer { Interval = 30000 };
         private readonly System.Windows.Forms.Timer _timerLector = new System.Windows.Forms.Timer { Interval = 5000 };
 
+        // Se crea con la ventana, ANTES de abrir el lector (los objetos del SDK se crean una sola vez)
+        private readonly RegistroHuella _registro = new RegistroHuella();
+
         private ApiCliente _api;
         private ApiAdmin _admin;
         private LectorHuellas _lector;
         private bool _iniciado;
         private bool _actualizando;
+        private int _tokenRegistro;                // para ignorar un registro que se canceló mientras se preparaba
+        private volatile bool _guardando;          // subiendo una huella: se ignoran capturas nuevas
         private string _ultimaSucursal = "Sin conectar";
 
         // Diferencia entre el reloj del servidor y el de esta PC (se usará para sellar las checadas)
@@ -100,6 +105,7 @@ namespace ChecadorLector
         {
             _timerEstado.Stop();
             _timerLector.Stop();
+            _registro.Cancelar();
             if (_lector != null) _lector.Dispose();
             if (_api != null) _api.Dispose();
             SalirAdmin();
@@ -134,6 +140,12 @@ namespace ChecadorLector
                         break;
                     case "salirAdmin":
                         SalirAdmin();
+                        break;
+                    case "iniciarRegistro":
+                        await IniciarRegistroAsync(m.EmpleadoId, m.Dedo);
+                        break;
+                    case "cancelarRegistro":
+                        CancelarRegistro();
                         break;
                 }
             }
@@ -178,18 +190,7 @@ namespace ChecadorLector
                 }
 
                 _admin = admin;
-                Enviar(new
-                {
-                    tipo = "admin",
-                    fase = "lista",
-                    empleados = lista.Select(x => new
-                    {
-                        id = x.EmpleadoId,
-                        numero = x.NumeroEmpleado,
-                        nombre = x.Nombre,
-                        dedos = x.Dedos
-                    }).ToList()
-                });
+                Enviar(new { tipo = "admin", fase = "lista", empleados = ProyectarLista(lista) });
             }
             catch (ErrorApi ex)
             {
@@ -205,9 +206,10 @@ namespace ChecadorLector
             }
         }
 
-        // Olvida la llave de administración
+        // Olvida la llave de administración (y cancela cualquier registro en curso)
         private void SalirAdmin()
         {
+            CancelarRegistro();
             if (_admin == null) return;
             _admin.Dispose();
             _admin = null;
@@ -216,6 +218,159 @@ namespace ChecadorLector
         private void ErrorAdmin(string texto)
         {
             Enviar(new { tipo = "admin", fase = "error", texto = texto });
+        }
+
+        private static object ProyectarLista(List<ResumenHuella> lista)
+        {
+            return lista.Select(x => new
+            {
+                id = x.EmpleadoId,
+                numero = x.NumeroEmpleado,
+                nombre = x.Nombre,
+                dedos = x.Dedos
+            }).ToList();
+        }
+
+        // ---------------------------------------------------------------- Registro de huellas
+
+        private void CancelarRegistro()
+        {
+            _tokenRegistro++;
+            _registro.Cancelar();
+        }
+
+        private async Task IniciarRegistroAsync(int empleadoId, int dedo)
+        {
+            CancelarRegistro();
+            int token = _tokenRegistro;
+
+            if (_admin == null)
+            {
+                ErrorRegistro("Primero entra con la llave de administración.");
+                return;
+            }
+            if (empleadoId <= 0 || dedo < 1 || dedo > 10)
+            {
+                ErrorRegistro("Empleado o dedo no válidos.");
+                return;
+            }
+            if (_lector == null || !_lector.Activo)
+            {
+                ErrorRegistro("El lector de huellas no está listo. Revisa el cable USB.");
+                return;
+            }
+            if (_api == null)
+            {
+                ErrorRegistro("El lector todavía no está conectado a la API. Revisa el estado en la pantalla principal.");
+                return;
+            }
+
+            try
+            {
+                // Las huellas ya registradas se bajan una vez, solo para comparar y se quedan en memoria
+                List<PlantillaRemota> remotas = await _api.PlantillasAsync();
+                if (token != _tokenRegistro) return; // se canceló mientras se descargaban
+
+                int total = _registro.Iniciar(empleadoId, dedo, remotas);
+                Enviar(new { tipo = "admin", fase = "registroListo", total = total });
+            }
+            catch (ErrorApi ex)
+            {
+                ErrorRegistro(ex.Message);
+            }
+            catch (Exception)
+            {
+                ErrorRegistro("Sin conexión con la API.");
+            }
+        }
+
+        private void ErrorRegistro(string texto)
+        {
+            Enviar(new { tipo = "admin", fase = "registroError", texto = texto });
+        }
+
+        // Corre en el hilo del SDK
+        private void ProcesarRegistro(DPFP.Sample muestra)
+        {
+            ResultadoCaptura r;
+            try
+            {
+                r = _registro.Procesar(_lector, muestra);
+            }
+            catch (Exception)
+            {
+                EnInterfaz(() => Enviar(new
+                {
+                    tipo = "admin", fase = "captura", ok = false, faltan = -1,
+                    texto = "Error del lector. Vuelve a poner el dedo."
+                }));
+                return;
+            }
+            if (r == null) return;
+
+            switch (r.Estado)
+            {
+                case EstadoCaptura.Duplicada:
+                    EnInterfaz(() => ErrorRegistro(r.Mensaje));
+                    break;
+
+                case EstadoCaptura.Reintentar:
+                    EnInterfaz(() => Enviar(new
+                    {
+                        tipo = "admin", fase = "captura", ok = false, faltan = r.Faltan, texto = r.Mensaje
+                    }));
+                    break;
+
+                case EstadoCaptura.Progreso:
+                    EnInterfaz(() => Enviar(new
+                    {
+                        tipo = "admin", fase = "captura", ok = true, faltan = r.Faltan, texto = r.Mensaje
+                    }));
+                    break;
+
+                case EstadoCaptura.Listo:
+                    _guardando = true;
+                    EnInterfaz(() =>
+                    {
+                        Task tarea = GuardarHuellaAsync(r.EmpleadoId, r.Dedo, r.Plantilla);
+                    });
+                    break;
+            }
+        }
+
+        // Hilo de la interfaz: sube la huella y refresca la lista
+        private async Task GuardarHuellaAsync(int empleadoId, int dedo, byte[] plantilla)
+        {
+            try
+            {
+                if (_admin == null) throw new ErrorApi("La sesión de administrador se cerró.", 0);
+
+                Enviar(new { tipo = "admin", fase = "guardando" });
+                await _admin.GuardarHuellaAsync(empleadoId, dedo, plantilla);
+
+                List<ResumenHuella> lista = await _admin.ResumenAsync();
+                Enviar(new
+                {
+                    tipo = "admin",
+                    fase = "guardado",
+                    empleadoId = empleadoId,
+                    dedo = dedo,
+                    empleados = ProyectarLista(lista)
+                });
+            }
+            catch (ErrorApi ex)
+            {
+                ErrorRegistro(ex.Message);
+            }
+            catch (Exception)
+            {
+                ErrorRegistro("No se pudo guardar la huella: sin conexión con la API.");
+            }
+            finally
+            {
+                Array.Clear(plantilla, 0, plantilla.Length); // la plantilla no se queda en memoria
+                _guardando = false;
+            }
         }
 
         // ---------------------------------------------------------------- Lector de huellas
@@ -242,6 +397,14 @@ namespace ChecadorLector
         // Corre en el hilo del SDK
         private void AlCapturarMuestra(DPFP.Sample muestra)
         {
+            if (_guardando) return;
+
+            if (_registro.Activo)
+            {
+                ProcesarRegistro(muestra);
+                return;
+            }
+
             string problema = _lector.Evaluar(muestra);
             bool buena = problema == null;
             string texto = buena ? "Huella leída correctamente" : problema;

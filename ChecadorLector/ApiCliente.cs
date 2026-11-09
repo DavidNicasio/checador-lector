@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Net.Http;
 using System.Threading.Tasks;
@@ -48,6 +49,34 @@ namespace ChecadorLector
                     estado.HoraServidorUtc, CultureInfo.InvariantCulture).UtcDateTime;
 
                 return new ResultadoEstado { Estado = estado, Desfase = horaServidor - mitad };
+            }
+        }
+
+        // Plantillas de los empleados activos, para comparar en local. Quedan solo en memoria.
+        // La API limita esta consulta a 10 por minuto y cada descarga queda en su bitácora.
+        public async Task<List<PlantillaRemota>> PlantillasAsync()
+        {
+            using (HttpResponseMessage respuesta = await _http.GetAsync("lector/plantillas"))
+            {
+                int codigo = (int)respuesta.StatusCode;
+                if (codigo == 401)
+                {
+                    throw new ErrorApi("La llave del lector no es válida o está desactivada.", 401);
+                }
+                if (codigo == 429)
+                {
+                    throw new ErrorApi("Demasiadas consultas seguidas. Espera un minuto e inténtalo de nuevo.", 429);
+                }
+                if (!respuesta.IsSuccessStatusCode)
+                {
+                    throw new ErrorApi("La API respondió " + codigo + ".", codigo);
+                }
+
+                string cuerpo = await respuesta.Content.ReadAsStringAsync();
+                RespuestaPlantillas datos = JsonConvert.DeserializeObject<RespuestaPlantillas>(cuerpo);
+                return datos != null && datos.Plantillas != null
+                    ? datos.Plantillas
+                    : new List<PlantillaRemota>();
             }
         }
 
